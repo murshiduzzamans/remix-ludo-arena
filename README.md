@@ -157,4 +157,3 @@ npm run preview
 - [Official Game Rules (game-rules.md)](./game-rules.md)
 - [Authoritative WebSocket Protocol (multiplayer-protocol.md)](./multiplayer-protocol.md)
 - [Unit & E2E Testing Plan (testing-plan.md)](./testing-plan.md)
-

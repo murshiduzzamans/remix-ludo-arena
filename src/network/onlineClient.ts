@@ -1,0 +1,284 @@
+import type { GameRules, GameState, PlayerColor } from '../engine/types';
+import type { RoomSnapshot, ServerMessage } from './protocol';
+
+const API_URL = (
+  import.meta.env.VITE_MULTIPLAYER_API_URL ||
+  (import.meta.env.PROD && typeof window !== 'undefined' ? window.location.origin : '')
+).replace(/\/$/, '');
+
+export interface CreateRoomOptions {
+  mode: 'classic_4p' | 'team_2v2';
+  playerName: string;
+  rules: GameRules;
+}
+
+interface RoomCredentials {
+  roomCode: string;
+  participantId: string;
+  token: string;
+  room: RoomSnapshot;
+}
+
+export type RoomEvent =
+  | { type: 'room'; room: RoomSnapshot }
+  | { type: 'game'; state: GameState; turnTimeRemainingSeconds: number }
+  | { type: 'timeout'; color: PlayerColor }
+  | { type: 'error'; message: string }
+  | { type: 'connection'; connected: boolean };
+
+export class OnlineRoomConnection {
+  readonly roomCode: string;
+  readonly participantId: string;
+  readonly token: string;
+  readonly localColor: PlayerColor;
+  private socket: WebSocket | null = null;
+  private listeners = new Set<(event: RoomEvent) => void>();
+  private pingTimer: number | undefined;
+  private reconnectTimer: number | undefined;
+  private reconnectAttempt = 0;
+  private manuallyClosed = false;
+  private roomSnapshot: RoomSnapshot;
+  private gameSnapshot: GameState | null = null;
+  private turnTimeRemainingSeconds = 30;
+
+  get currentRoom(): RoomSnapshot {
+    return this.roomSnapshot;
+  }
+
+  get currentGameState(): GameState | null {
+    return this.gameSnapshot;
+  }
+
+  private constructor(credentials: RoomCredentials) {
+    this.roomCode = credentials.roomCode;
+    this.participantId = credentials.participantId;
+    this.token = credentials.token;
+    this.roomSnapshot = credentials.room;
+    this.localColor = credentials.room.participants.find((player) => player.id === credentials.participantId)!.color;
+  }
+
+  static get configured(): boolean {
+    return Boolean(API_URL);
+  }
+
+  static async create(options: CreateRoomOptions): Promise<OnlineRoomConnection> {
+    const credentials = await this.request('/api/rooms', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    });
+    try { window.localStorage.setItem(this.tokenKey(credentials.roomCode), credentials.token); } catch { /* The live connection still works for this tab. */ }
+    const connection = new OnlineRoomConnection(credentials);
+    await connection.connect();
+    return connection;
+  }
+
+  static async join(roomCodeInput: string, playerName: string): Promise<OnlineRoomConnection> {
+    const roomCode = roomCodeInput.trim().toUpperCase().replace(/\s+/g, '');
+    if (!roomCode) throw new Error('Enter a room code or open your friend’s invite link.');
+    let savedToken: string | null = null;
+    try { savedToken = window.localStorage.getItem(this.tokenKey(roomCode)); } catch { /* Continue as a new room guest. */ }
+    const credentials = await this.request(`/api/rooms/${encodeURIComponent(roomCode)}/join`, {
+      method: 'POST',
+      body: JSON.stringify({ playerName, token: savedToken ?? undefined }),
+    });
+    try { window.localStorage.setItem(this.tokenKey(credentials.roomCode), credentials.token); } catch { /* The live connection still works for this tab. */ }
+    const connection = new OnlineRoomConnection(credentials);
+    await connection.connect();
+    return connection;
+  }
+
+  static inviteUrl(roomCode: string): string {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.searchParams.set('room', roomCode);
+    return url.toString();
+  }
+
+  private static tokenKey(roomCode: string): string {
+    return `ludo-room-token:${roomCode}`;
+  }
+
+  private static async request(path: string, init: RequestInit): Promise<RoomCredentials> {
+    if (!API_URL) {
+      throw new Error('Online rooms are not configured yet. Set VITE_MULTIPLAYER_API_URL to your multiplayer Worker URL.');
+    }
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...init.headers },
+      });
+    } catch {
+      throw new Error('Could not reach the multiplayer server. Check your connection and try again.');
+    }
+    const result = await response.json() as RoomCredentials | { error?: string };
+    if (!response.ok) throw new Error('error' in result ? result.error ?? 'The room request failed.' : 'The room request failed.');
+    return result as RoomCredentials;
+  }
+
+  private async connect(): Promise<void> {
+    const wsUrl = new URL(`${API_URL}/api/rooms/${encodeURIComponent(this.roomCode)}/ws`);
+    wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    await new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(wsUrl);
+      this.socket = socket;
+      let settled = false;
+      let timeout: number;
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        if (error) reject(error);
+        else {
+          this.reconnectAttempt = 0;
+          this.emit({ type: 'connection', connected: true });
+          this.startHeartbeat();
+          resolve();
+        }
+      };
+      timeout = window.setTimeout(() => {
+        if (!settled) {
+          settle(new Error('The room connection timed out. Try joining again.'));
+          socket.close();
+        }
+      }, 10000);
+
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify({ type: 'CLIENT_AUTH', payload: { token: this.token } }));
+      });
+      socket.addEventListener('message', (event) => {
+        let message: ServerMessage | undefined;
+        try { message = JSON.parse(String(event.data)) as ServerMessage; } catch { /* receive reports malformed data */ }
+        this.receive(event.data);
+        if (message?.type === 'SERVER_AUTHENTICATED') settle();
+        else if (message?.type === 'SERVER_ERROR' && !settled) {
+          this.manuallyClosed = true;
+          settle(new Error(message.payload.message));
+          socket.close();
+        }
+      });
+      socket.addEventListener('error', () => {
+        if (!settled) settle(new Error('The room connection failed. Please try again.'));
+      });
+      socket.addEventListener('close', (event) => {
+        this.stopHeartbeat();
+        this.emit({ type: 'connection', connected: false });
+        if (!settled) settle(new Error(event.code === 4003 ? 'Reconnect token is invalid. Join the room again.' : 'The room connection closed before joining.'));
+        if (event.code === 4004 || event.code === 4001 || event.code === 4003) {
+          this.manuallyClosed = true;
+          this.emit({
+            type: 'error',
+            message: event.code === 4004
+              ? 'The room host ended this room.'
+              : event.code === 4001
+                ? 'This player reconnected in another tab. Continue in the newer tab.'
+                : 'Reconnect token is invalid. Join the room again.',
+          });
+        } else if (!this.manuallyClosed) {
+          this.scheduleReconnect();
+        }
+      });
+    });
+  }
+
+  private receive(raw: unknown): void {
+    let message: ServerMessage;
+    try {
+      message = JSON.parse(String(raw)) as ServerMessage;
+    } catch {
+      this.emit({ type: 'error', message: 'The server sent an unreadable response.' });
+      return;
+    }
+    if (message.type === 'SERVER_ROOM_STATE') {
+      this.roomSnapshot = message.payload;
+      if (!message.payload.isMatchInProgress) {
+        this.gameSnapshot = null;
+        this.turnTimeRemainingSeconds = 30;
+      }
+      this.emit({ type: 'room', room: message.payload });
+    } else if (message.type === 'SERVER_GAME_STATE_SYNC') {
+      this.gameSnapshot = message.payload.state;
+      this.turnTimeRemainingSeconds = message.payload.turnTimeRemainingSeconds;
+      this.emit({ type: 'game', state: message.payload.state, turnTimeRemainingSeconds: message.payload.turnTimeRemainingSeconds });
+    } else if (message.type === 'SERVER_TURN_TIMEOUT') {
+      this.emit({ type: 'timeout', color: message.payload.timedOutColor });
+    } else if (message.type === 'SERVER_ERROR') {
+      this.emit({ type: 'error', message: message.payload.message });
+    }
+  }
+
+  subscribe(listener: (event: RoomEvent) => void): () => void {
+    this.listeners.add(listener);
+    listener({ type: 'room', room: this.roomSnapshot });
+    if (this.gameSnapshot) listener({ type: 'game', state: this.gameSnapshot, turnTimeRemainingSeconds: this.turnTimeRemainingSeconds });
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(event: RoomEvent): void {
+    this.listeners.forEach((listener) => listener(event));
+  }
+
+  private send(type: string, payload?: unknown): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      this.emit({ type: 'error', message: 'Reconnecting to the room. Please try that action again in a moment.' });
+      return;
+    }
+    this.socket.send(JSON.stringify({ type, ...(payload === undefined ? {} : { payload }) }));
+  }
+
+  setReady(isReady: boolean): void {
+    this.send('CLIENT_SET_READY', { isReady });
+  }
+
+  startMatch(): void {
+    this.send('CLIENT_START_MATCH');
+  }
+
+  requestRematch(): void {
+    this.send('CLIENT_REQUEST_REMATCH');
+  }
+
+  backToLobby(): void {
+    this.send('CLIENT_BACK_TO_LOBBY');
+  }
+
+  rollDice(): void {
+    this.send('CLIENT_ROLL_DICE');
+  }
+
+  selectMove(tokenIndex: number, tokenColor?: PlayerColor): void {
+    this.send('CLIENT_SELECT_MOVE', { tokenIndex, tokenColor });
+  }
+
+  close(): void {
+    this.send('CLIENT_LEAVE_ROOM');
+    this.manuallyClosed = true;
+    this.stopHeartbeat();
+    if (this.reconnectTimer !== undefined) window.clearTimeout(this.reconnectTimer);
+    this.socket?.close(1000, 'Player left room');
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.pingTimer = window.setInterval(() => this.send('CLIENT_PING', { clientTimestamp: Date.now() }), 15000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.pingTimer !== undefined) window.clearInterval(this.pingTimer);
+    this.pingTimer = undefined;
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer !== undefined) window.clearTimeout(this.reconnectTimer);
+    this.reconnectAttempt += 1;
+    const delay = Math.min(1000 * 2 ** Math.min(this.reconnectAttempt, 4), 15000);
+    this.reconnectTimer = window.setTimeout(() => {
+      if (!this.manuallyClosed) void this.connect().catch(() => undefined);
+    }, delay);
+  }
+}
+
+export function roomCodeFromUrl(): string | null {
+  const code = new URLSearchParams(window.location.search).get('room');
+  return code?.trim().toUpperCase() || null;
+}

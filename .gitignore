@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+coverage/
+dev-dist/
+.agents/
+.wrangler/
+.wrangler-config/
+.wrangler-dry-run/
+.DS_Store
+*.log
+.env*
+!.env.example

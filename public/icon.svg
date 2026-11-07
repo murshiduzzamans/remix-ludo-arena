@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0F17"/>
+      <stop offset="100%" stop-color="#161F30"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A"/>
+      <stop offset="50%" stop-color="#D4AF37"/>
+      <stop offset="100%" stop-color="#92400E"/>
+    </linearGradient>
+    <radialGradient id="ruby" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#F87171"/>
+      <stop offset="70%" stop-color="#DC2626"/>
+      <stop offset="100%" stop-color="#991B1B"/>
+    </radialGradient>
+    <radialGradient id="emerald" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="70%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#064E3B"/>
+    </radialGradient>
+    <radialGradient id="amber" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#FCD34D"/>
+      <stop offset="70%" stop-color="#D97706"/>
+      <stop offset="100%" stop-color="#78350F"/>
+    </radialGradient>
+    <radialGradient id="sapphire" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#60A5FA"/>
+      <stop offset="70%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background rounded canvas -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="12" y="12" width="488" height="488" rx="100" fill="none" stroke="url(#gold)" stroke-width="4" stroke-opacity="0.6"/>
+
+  <!-- Four Quadrant Jewel Rings -->
+  <circle cx="160" cy="160" r="64" fill="url(#ruby)" filter="drop-shadow(0 6px 12px rgba(220,38,38,0.4))"/>
+  <circle cx="352" cy="160" r="64" fill="url(#emerald)" filter="drop-shadow(0 6px 12px rgba(16,185,129,0.4))"/>
+  <circle cx="352" cy="352" r="64" fill="url(#amber)" filter="drop-shadow(0 6px 12px rgba(245,158,11,0.4))"/>
+  <circle cx="160" cy="352" r="64" fill="url(#sapphire)" filter="drop-shadow(0 6px 12px rgba(37,99,235,0.4))"/>
+
+  <!-- Central Star Cross -->
+  <circle cx="256" cy="256" r="54" fill="#0E1626" stroke="url(#gold)" stroke-width="5"/>
+  <path d="M256 220 L266 244 L292 246 L272 264 L278 290 L256 276 L234 290 L240 264 L220 246 L246 244 Z" fill="url(#gold)"/>
+</svg>
