@@ -35,7 +35,13 @@ type ClientMessage =
   | { type: 'CLIENT_REQUEST_TEAM_SWAP'; payload: { targetParticipantId: string } }
   | { type: 'CLIENT_RESPOND_TEAM_SWAP'; payload: { requestId: string; accept: boolean } }
   | { type: 'CLIENT_LEAVE_ROOM' }
-  | { type: 'CLIENT_PING'; payload: { clientTimestamp: number } };
+  | { type: 'CLIENT_PING'; payload: { clientTimestamp: number } }
+  | { type: 'CLIENT_SET_CHAT_ENABLED'; payload: { enabled: boolean } }
+  | { type: 'CLIENT_SET_VOICE_ENABLED'; payload: { enabled: boolean } }
+  | { type: 'chat'; text: string }
+  | { type: 'chat_reaction'; reaction: 'thumbs_up' | 'laugh' | 'wow' | 'angry' | 'party' | 'gg' }
+  | { type: 'voice_join' }
+  | { type: 'voice_leave' };
 ```
 
 ### Core Client Messages:
@@ -93,6 +99,48 @@ In a 2v2 room lobby, a player may request a team swap with a connected human on 
 ```
 
 `CLIENT_LEAVE_ROOM` closes the room for everyone when sent by the host; another player leaving frees their seat. `CLIENT_PING` is the heartbeat message.
+
+#### Room chat
+Chat is available only in online rooms. The authenticated connection determines the sender's name and color; client-supplied identity fields are ignored. The Worker normalizes text, rejects empty or over-200-code-point messages and frames over 4 KiB, limits each connection to five messages per rolling ten seconds, and keeps at most 50 messages in Durable Object memory. Chat history is intentionally not persisted.
+```json
+{ "type": "chat", "text": "Good luck!" }
+{ "type": "chat_reaction", "reaction": "thumbs_up" }
+{ "type": "CLIENT_SET_CHAT_ENABLED", "payload": { "enabled": false } }
+```
+
+Only the room host can enable or disable chat. Chat messages and history use these server messages:
+```json
+{ "type": "chat", "message": { "id": "message-id", "color": "red", "name": "Alex", "text": "Good luck!", "sentAt": 1741234567890 } }
+{ "type": "chat_history", "messages": [] }
+{ "type": "error", "code": "CHAT_RATE_LIMITED", "retryAfterSeconds": 4 }
+```
+
+#### Room voice
+Room voice is optional, audio-only Cloudflare RealtimeKit. Authenticated room members request access with `voice_join`; the server creates/reuses that room's RealtimeKit meeting, reserves a participant-minute budget, and returns a short-lived participant token only to that member. `voice_leave`, disconnect, host room closure, host disablement, the session time limit, and budget enforcement remove the provider participant. The client SDK is loaded only when a member joins voice.
+
+The room host controls the room-level `voiceEnabled` flag. Voice is unavailable unless its Durable Object binding and server-side RealtimeKit credentials are configured. `VOICE_ENABLED=false` disables it globally. The server never sends its API token, RealtimeKit meeting ID, or admin secret to browsers.
+```json
+{ "type": "voice_join" }
+{ "type": "voice_leave" }
+{ "type": "CLIENT_SET_VOICE_ENABLED", "payload": { "enabled": false } }
+{ "type": "error", "code": "VOICE_BUDGET_REACHED" }
+{ "type": "voice_token", "authToken": "<participant-only token>" }
+{ "type": "voice_status", "seatsInVoice": ["red", "green"] }
+```
+
+Server limits are four room participants in voice, five join attempts per connection per rolling minute, and three hours per voice session. The global budget defaults to 8,000 participant-minutes per UTC month and can be overridden with `VOICE_MONTHLY_MINUTE_LIMIT`. Participant-minutes are rounded up per participant; a warning is sent to each active room at 80%, new sessions are blocked at the cap, and active rooms disconnect voice when their next minute checkpoint observes the cap. `GET /api/admin/voice-budget` returns usage only when sent `Authorization: Bearer <VOICE_BUDGET_ADMIN_SECRET>`.
+
+#### Configure Cloudflare voice
+1. Create a RealtimeKit application and an audio-only preset. Disable video, screen sharing, and recording in the preset; the game UI does not expose those features.
+2. Set these values in an ignored local `.dev.vars` file for `wrangler dev`, or provision them as Worker secrets in the production account:
+   - `CF_ACCOUNT_ID`
+   - `REALTIMEKIT_APP_ID`
+   - `REALTIMEKIT_API_TOKEN`
+   - `REALTIMEKIT_VOICE_PRESET`
+   - `VOICE_BUDGET_ADMIN_SECRET` (use a long, unique random value)
+   - Optional `VOICE_MONTHLY_MINUTE_LIMIT` (defaults to `8000`) and `VOICE_ENABLED` (`false` to disable)
+3. Keep all credentials server-side. Never add `.dev.vars` or real values to Git.
+4. Verify locally with two browser/device sessions: join voice, grant microphone permission, mute/unmute, leave, refresh/reconnect, disable voice as host, and inspect usage with the admin endpoint. Production testing requires a deployed RealtimeKit app and actual Cloudflare credentials; automated tests mock the provider.
 
 ---
 

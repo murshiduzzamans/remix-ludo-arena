@@ -6,9 +6,17 @@ compatibility_date = "2026-11-06"
 name = "LUDO_ROOMS"
 class_name = "LudoRoom"
 
+[[durable_objects.bindings]]
+name = "VOICE_BUDGET"
+class_name = "VoiceBudget"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["LudoRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["VoiceBudget"]
 
 [[ratelimits]]
 name = "CREATE_ROOM_LIMITER"
@@ -26,6 +34,10 @@ simple = { limit = 10, period = 60 }
 [[previews.durable_objects.bindings]]
 name = "LUDO_ROOMS"
 class_name = "LudoRoom"
+
+[[previews.durable_objects.bindings]]
+name = "VOICE_BUDGET"
+class_name = "VoiceBudget"
 
 [dev]
 ip = "0.0.0.0"

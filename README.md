@@ -57,6 +57,20 @@ The room host can start with two or more people. Empty seats are controlled by t
 
 The deployed app uses its own origin for API and WebSocket requests, so no production API variable is needed. This repository does not contain Cloudflare account credentials; deploying to a permanent account requires signing in first.
 
+### Optional room voice
+
+Room voice uses Cloudflare RealtimeKit and stays unavailable until its Durable Object binding and server-side credentials are configured. Create an audio-only RealtimeKit preset with video, screen sharing, and recording disabled. For local `wrangler dev`, put the following keys in the ignored `.dev.vars` file; for production, provision them as Worker secrets:
+
+```text
+CF_ACCOUNT_ID
+REALTIMEKIT_APP_ID
+REALTIMEKIT_API_TOKEN
+REALTIMEKIT_VOICE_PRESET
+VOICE_BUDGET_ADMIN_SECRET
+```
+
+`VOICE_MONTHLY_MINUTE_LIMIT` is optional (default `8000` participant-minutes per UTC month). Set `VOICE_ENABLED=false` to disable voice globally. Never commit `.dev.vars` or credentials. The host can also enable/disable voice per room. The monthly usage endpoint is `GET /api/admin/voice-budget` with `Authorization: Bearer <VOICE_BUDGET_ADMIN_SECRET>`. See [multiplayer-protocol.md](./multiplayer-protocol.md#configure-cloudflare-voice) for setup and manual two-device validation.
+
 ---
 
 ## 🗂 Project Architecture

@@ -19,7 +19,24 @@ export type ClientMessage =
   | { type: 'CLIENT_REQUEST_TEAM_SWAP'; payload: { targetParticipantId: string } }
   | { type: 'CLIENT_RESPOND_TEAM_SWAP'; payload: { requestId: string; accept: boolean } }
   | { type: 'CLIENT_LEAVE_ROOM' }
-  | { type: 'CLIENT_PING'; payload: { clientTimestamp: number } };
+  | { type: 'CLIENT_PING'; payload: { clientTimestamp: number } }
+  | { type: 'CLIENT_SET_CHAT_ENABLED'; payload: { enabled: boolean } }
+  | { type: 'CLIENT_SET_VOICE_ENABLED'; payload: { enabled: boolean } }
+  | { type: 'chat'; text: string }
+  | { type: 'chat_reaction'; reaction: ChatReaction }
+  | { type: 'voice_join' }
+  | { type: 'voice_leave' };
+
+export type ChatReaction = 'thumbs_up' | 'laugh' | 'wow' | 'angry' | 'party' | 'gg';
+
+export interface ChatMessage {
+  id: string;
+  color: PlayerColor;
+  name: string;
+  text: string;
+  sentAt: number;
+  reaction?: ChatReaction;
+}
 
 export interface RoomParticipant {
   id: string;
@@ -43,6 +60,10 @@ export interface RoomSnapshot {
   isMatchInProgress: boolean;
   rematchRequests?: string[];
   teamSwapRequest?: { id: string; requesterId: string; targetId: string; expiresAt: number } | null;
+  chatEnabled?: boolean;
+  voiceEnabled?: boolean;
+  voiceAvailable?: boolean;
+  seatsInVoice?: PlayerColor[];
 }
 
 export interface OnlineCapturedToken { color: PlayerColor; tokenIndex: number; fromStep: number }
@@ -67,6 +88,20 @@ export type ServerMessage =
       payload: { state: GameState; serverTimestamp: number; turnTimeRemainingSeconds: number; move?: OnlineTokenMove };
     }
   | { type: 'SERVER_TURN_TIMEOUT'; payload: { timedOutColor: PlayerColor; autoPickedTokenIndex?: number } }
+  | { type: 'chat'; message: ChatMessage }
+  | { type: 'chat_history'; messages: ChatMessage[] }
+  | { type: 'voice_token'; authToken: string }
+  | { type: 'voice_status'; seatsInVoice: PlayerColor[] }
+  | { type: 'voice_budget_warning'; payload: { month: string; totalMinutes: number; limitMinutes: number } }
+  | { type: 'voice_session_expired' }
+  | {
+      type: 'error';
+      code:
+        | 'CHAT_RATE_LIMITED' | 'CHAT_INVALID' | 'CHAT_DISABLED'
+        | 'VOICE_DISABLED' | 'VOICE_BUDGET_REACHED' | 'VOICE_ROOM_FULL' | 'VOICE_UNAVAILABLE'
+        | 'VOICE_NOT_ALLOWED' | 'VOICE_RATE_LIMITED';
+      retryAfterSeconds?: number;
+    }
   | { type: 'SERVER_PLAYER_DISCONNECTED'; payload: { playerId: string; color: PlayerColor; reconnectGracePeriodSeconds: number } }
   | {
       type: 'SERVER_ERROR';

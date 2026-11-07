@@ -23,6 +23,7 @@ import { useGameTimer } from '../../hooks/useGameTimer';
 import type { OnlineRoomConnection, RoomEvent } from '../../network/onlineClient';
 import { AnimatingCaptureInfo, AnimatingTokenInfo, LudoBoard } from '../board/LudoBoard';
 import { CornerPlayerPod, shortPlayerName } from '../game/CornerPlayerPod';
+import { OnlineChatDock } from '../social/OnlineChatDock';
 import { ResultsModal } from './ResultsModal';
 
 interface BoardGameScreenProps {
@@ -713,6 +714,10 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         {renderCornerPod(layout.bottomRight, 'bottom-right')}
       </div>
 
+      {onlineSession && roomSnapshot && (
+        <OnlineChatDock connection={onlineSession} room={roomSnapshot} localColor={onlineSession.localColor} />
+      )}
+
       {gameState.phase === 'game_over' && (
         <ResultsModal
           gameState={gameState}
@@ -731,4 +736,3 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
     </div>
   );
 };
-

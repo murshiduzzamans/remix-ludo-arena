@@ -11,3 +11,4 @@ dev-dist/
 *.log
 .env*
 !.env.example
+.dev.vars*

@@ -1,5 +1,5 @@
 import type { GameRules, GameState, PlayerColor } from '../engine/types';
-import type { OnlineTokenMove, RoomSnapshot, ServerMessage } from './protocol';
+import type { ChatMessage, ChatReaction, OnlineTokenMove, RoomSnapshot, ServerMessage } from './protocol';
 
 const API_URL = (
   import.meta.env.VITE_MULTIPLAYER_API_URL ||
@@ -23,6 +23,14 @@ export type RoomEvent =
   | { type: 'room'; room: RoomSnapshot }
   | { type: 'game'; state: GameState; turnTimeRemainingSeconds: number; move?: OnlineTokenMove }
   | { type: 'timeout'; color: PlayerColor }
+  | { type: 'chat'; message: ChatMessage }
+  | { type: 'chat_history'; messages: ChatMessage[] }
+  | { type: 'chat_error'; code: 'CHAT_RATE_LIMITED' | 'CHAT_INVALID' | 'CHAT_DISABLED'; retryAfterSeconds?: number }
+  | { type: 'voice_token'; authToken: string }
+  | { type: 'voice_status'; seatsInVoice: PlayerColor[] }
+  | { type: 'voice_error'; code: 'VOICE_DISABLED' | 'VOICE_BUDGET_REACHED' | 'VOICE_ROOM_FULL' | 'VOICE_UNAVAILABLE' | 'VOICE_NOT_ALLOWED' | 'VOICE_RATE_LIMITED'; retryAfterSeconds?: number }
+  | { type: 'voice_budget_warning'; month: string; totalMinutes: number; limitMinutes: number }
+  | { type: 'voice_session_expired' }
   | { type: 'error'; message: string }
   | { type: 'connection'; connected: boolean };
 
@@ -41,6 +49,9 @@ export class OnlineRoomConnection {
   private gameSnapshot: GameState | null = null;
   private turnTimeRemainingSeconds = 30;
   private seenMoveIds = new Set<string>();
+  private chatHistory: ChatMessage[] = [];
+  private chatHistoryLoaded = false;
+  private voiceRequested = false;
 
   get currentRoom(): RoomSnapshot {
     return this.roomSnapshot;
@@ -211,6 +222,8 @@ export class OnlineRoomConnection {
         this.turnTimeRemainingSeconds = 30;
       }
       this.emit({ type: 'room', room: message.payload });
+    } else if (message.type === 'SERVER_AUTHENTICATED') {
+      if (this.voiceRequested) this.sendRaw({ type: 'voice_join' });
     } else if (message.type === 'SERVER_GAME_STATE_SYNC') {
       this.gameSnapshot = message.payload.state;
       this.turnTimeRemainingSeconds = message.payload.turnTimeRemainingSeconds;
@@ -224,6 +237,36 @@ export class OnlineRoomConnection {
       this.emit({ type: 'game', state: message.payload.state, turnTimeRemainingSeconds: message.payload.turnTimeRemainingSeconds, ...(freshMove ? { move: freshMove } : {}) });
     } else if (message.type === 'SERVER_TURN_TIMEOUT') {
       this.emit({ type: 'timeout', color: message.payload.timedOutColor });
+    } else if (message.type === 'chat_history') {
+      this.chatHistory = message.messages.slice(-50);
+      this.chatHistoryLoaded = true;
+      this.emit({ type: 'chat_history', messages: this.chatHistory });
+    } else if (message.type === 'chat') {
+      this.chatHistory = [...this.chatHistory, message.message].slice(-50);
+      this.emit({ type: 'chat', message: message.message });
+    } else if (message.type === 'voice_token') {
+      this.emit({ type: 'voice_token', authToken: message.authToken });
+    } else if (message.type === 'voice_status') {
+      this.emit({ type: 'voice_status', seatsInVoice: message.seatsInVoice });
+    } else if (message.type === 'voice_budget_warning') {
+      this.emit({ type: 'voice_budget_warning', ...message.payload });
+    } else if (message.type === 'voice_session_expired') {
+      this.voiceRequested = false;
+      this.emit({ type: 'voice_session_expired' });
+    } else if (message.type === 'error') {
+      if (message.code === 'CHAT_RATE_LIMITED' || message.code === 'CHAT_INVALID' || message.code === 'CHAT_DISABLED') {
+        this.emit({
+          type: 'chat_error',
+          code: message.code,
+          ...(message.retryAfterSeconds ? { retryAfterSeconds: message.retryAfterSeconds } : {}),
+        });
+      } else {
+        this.emit({
+          type: 'voice_error',
+          code: message.code,
+          ...(message.retryAfterSeconds ? { retryAfterSeconds: message.retryAfterSeconds } : {}),
+        });
+      }
     } else if (message.type === 'SERVER_ERROR') {
       this.emit({ type: 'error', message: message.payload.message });
     }
@@ -233,6 +276,7 @@ export class OnlineRoomConnection {
     this.listeners.add(listener);
     listener({ type: 'room', room: this.roomSnapshot });
     if (this.gameSnapshot) listener({ type: 'game', state: this.gameSnapshot, turnTimeRemainingSeconds: this.turnTimeRemainingSeconds });
+    if (this.chatHistoryLoaded) listener({ type: 'chat_history', messages: this.chatHistory });
     return () => this.listeners.delete(listener);
   }
 
@@ -241,11 +285,15 @@ export class OnlineRoomConnection {
   }
 
   private send(type: string, payload?: unknown): void {
+    this.sendRaw({ type, ...(payload === undefined ? {} : { payload }) });
+  }
+
+  private sendRaw(message: Record<string, unknown>): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       this.emit({ type: 'error', message: 'Reconnecting to the room. Please try that action again in a moment.' });
       return;
     }
-    this.socket.send(JSON.stringify({ type, ...(payload === undefined ? {} : { payload }) }));
+    this.socket.send(JSON.stringify(message));
   }
 
   setReady(isReady: boolean): void {
@@ -278,6 +326,32 @@ export class OnlineRoomConnection {
 
   respondToTeamSwap(requestId: string, accept: boolean): void {
     this.send('CLIENT_RESPOND_TEAM_SWAP', { requestId, accept });
+  }
+
+  sendChat(text: string): void {
+    this.sendRaw({ type: 'chat', text });
+  }
+
+  sendChatReaction(reaction: ChatReaction): void {
+    this.sendRaw({ type: 'chat_reaction', reaction });
+  }
+
+  setChatEnabled(enabled: boolean): void {
+    this.send('CLIENT_SET_CHAT_ENABLED', { enabled });
+  }
+
+  setVoiceEnabled(enabled: boolean): void {
+    this.send('CLIENT_SET_VOICE_ENABLED', { enabled });
+  }
+
+  joinVoice(): void {
+    this.voiceRequested = true;
+    this.sendRaw({ type: 'voice_join' });
+  }
+
+  leaveVoice(): void {
+    this.voiceRequested = false;
+    this.sendRaw({ type: 'voice_leave' });
   }
 
   close(): void {

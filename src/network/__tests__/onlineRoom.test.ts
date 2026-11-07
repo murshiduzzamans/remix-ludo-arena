@@ -154,6 +154,157 @@ describe('online private rooms', () => {
     expect(friend.room.participants[1]).toMatchObject({ name: 'Friend', color: 'green' });
   });
 
+  it('sanitizes chat, stamps the authenticated sender, broadcasts to room members, and restores history', async () => {
+    const namespace = new MemoryNamespace();
+    const created = await worker.fetch(new Request('https://game.test/api/rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'classic_4p', playerName: 'Host', rules }),
+    }), { LUDO_ROOMS: namespace as never });
+    const host = await created.json() as { roomCode: string; participantId: string; token: string };
+    const entry = namespace.rooms.get(host.roomCode)!;
+    const hostSocket = new FakeSocket();
+    const unauthenticatedSocket = new FakeSocket();
+    hostSocket.serializeAttachment({ participantId: host.participantId });
+    unauthenticatedSocket.serializeAttachment({ participantId: null });
+    entry.state.acceptWebSocket(hostSocket);
+    entry.state.acceptWebSocket(unauthenticatedSocket);
+
+    await entry.room.webSocketMessage(hostSocket as never, JSON.stringify({
+      type: 'chat',
+      text: '  Hello\u200B   <img src=x onerror=alert(1)>  ',
+      name: 'Spoofed name',
+      color: 'blue',
+      id: 'spoofed-id',
+    }));
+
+    const broadcast = hostSocket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'chat');
+    expect(broadcast.message).toMatchObject({
+      color: 'red',
+      name: 'Host',
+      text: 'Hello <img src=x onerror=alert(1)>',
+    });
+    expect(broadcast.message.id).not.toBe('spoofed-id');
+    expect(unauthenticatedSocket.sent.map((item) => JSON.parse(item)).some((item) => item.type === 'chat')).toBe(false);
+    expect(entry.state.storage.values.get('room')).not.toHaveProperty('chatMessages');
+
+    const reconnectSocket = new FakeSocket();
+    reconnectSocket.serializeAttachment({ participantId: null });
+    entry.state.acceptWebSocket(reconnectSocket);
+    await entry.room.webSocketMessage(reconnectSocket as never, JSON.stringify({
+      type: 'CLIENT_AUTH', payload: { token: host.token },
+    }));
+    expect(reconnectSocket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'chat_history'))
+      .toMatchObject({ messages: [broadcast.message] });
+  });
+
+  it('rejects invalid and oversized chat, rate limits 5 messages per connection, then recovers', async () => {
+    const namespace = new MemoryNamespace();
+    const created = await worker.fetch(new Request('https://game.test/api/rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'classic_4p', playerName: 'Host', rules }),
+    }), { LUDO_ROOMS: namespace as never });
+    const host = await created.json() as { roomCode: string; participantId: string };
+    const entry = namespace.rooms.get(host.roomCode)!;
+    const socket = new FakeSocket();
+    socket.serializeAttachment({ participantId: host.participantId });
+    entry.state.acceptWebSocket(socket);
+
+    const initialTime = Date.now();
+    let now = initialTime;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const send = async (message: unknown) => entry.room.webSocketMessage(socket as never, JSON.stringify(message));
+    try {
+      await entry.room.webSocketMessage(socket as never, 'null');
+      for (const text of ['', '   ', null, 'ব'.repeat(201), '😀'.repeat(201)]) {
+        await send({ type: 'chat', text });
+      }
+      await send({ type: 'chat', text: 'x'.repeat(5000) });
+      await send({ type: 'chat_reaction', reaction: 'not-a-reaction' });
+      expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === 'chat')).toHaveLength(0);
+      expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === 'error' && item.code === 'CHAT_INVALID')).toHaveLength(7);
+      expect(socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'SERVER_ERROR'))
+        .toMatchObject({ payload: { code: 'INVALID_MESSAGE' } });
+
+      for (let index = 0; index < 5; index += 1) {
+        await send({ type: 'chat', text: `message ${index}` });
+        now += 100;
+      }
+      await send({ type: 'chat', text: 'blocked' });
+      expect(socket.sent.map((item) => JSON.parse(item)).at(-1)).toMatchObject({
+        type: 'error', code: 'CHAT_RATE_LIMITED',
+      });
+
+      now += 10_000;
+      await send({ type: 'chat', text: 'recovered' });
+      expect(socket.sent.map((item) => JSON.parse(item)).at(-1)).toMatchObject({
+        type: 'chat', message: { text: 'recovered' },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('caps chat history at 50 messages and lets only the host toggle chat', async () => {
+    const namespace = new MemoryNamespace();
+    const env = { LUDO_ROOMS: namespace as never };
+    const created = await worker.fetch(new Request('https://game.test/api/rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'classic_4p', playerName: 'Host', rules }),
+    }), env);
+    const host = await created.json() as { roomCode: string; participantId: string; token: string };
+    const joined = await worker.fetch(new Request(`https://game.test/api/rooms/${host.roomCode}/join`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerName: 'Friend' }),
+    }), env);
+    const friend = await joined.json() as { participantId: string };
+    const entry = namespace.rooms.get(host.roomCode)!;
+    const hostSocket = new FakeSocket();
+    const friendSocket = new FakeSocket();
+    hostSocket.serializeAttachment({ participantId: host.participantId });
+    friendSocket.serializeAttachment({ participantId: friend.participantId });
+    entry.state.acceptWebSocket(hostSocket);
+    entry.state.acceptWebSocket(friendSocket);
+
+    const initialTime = Date.now();
+    let now = initialTime;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      for (let index = 0; index < 55; index += 1) {
+        if (index > 0 && index % 5 === 0) now += 10_000;
+        await entry.room.webSocketMessage(hostSocket as never, JSON.stringify({ type: 'chat', text: `message ${index}` }));
+        now += 100;
+      }
+      await entry.room.webSocketMessage(friendSocket as never, JSON.stringify({
+        type: 'CLIENT_SET_CHAT_ENABLED', payload: { enabled: false },
+      }));
+      expect(friendSocket.sent.map((item) => JSON.parse(item)).at(-1)).toMatchObject({
+        type: 'SERVER_ERROR', payload: { code: 'NOT_HOST' },
+      });
+
+      const reconnectSocket = new FakeSocket();
+      reconnectSocket.serializeAttachment({ participantId: null });
+      entry.state.acceptWebSocket(reconnectSocket);
+      await entry.room.webSocketMessage(reconnectSocket as never, JSON.stringify({
+        type: 'CLIENT_AUTH', payload: { token: host.token },
+      }));
+      const history = reconnectSocket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'chat_history');
+      expect(history.messages).toHaveLength(50);
+      expect(history.messages[0].text).toBe('message 5');
+      expect(history.messages[49].text).toBe('message 54');
+
+      await entry.room.webSocketMessage(reconnectSocket as never, JSON.stringify({
+        type: 'CLIENT_SET_CHAT_ENABLED', payload: { enabled: false },
+      }));
+      await entry.room.webSocketMessage(reconnectSocket as never, JSON.stringify({ type: 'chat', text: 'disabled' }));
+      expect(reconnectSocket.sent.map((item) => JSON.parse(item)).at(-1)).toMatchObject({
+        type: 'error', code: 'CHAT_DISABLED',
+      });
+      expect((entry.state.storage.values.get('room') as { chatEnabled?: boolean }).chatEnabled).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('keeps simultaneous joins consistent when a Durable Object cold-loads a room', async () => {
     const namespace = new MemoryNamespace();
     const env = { LUDO_ROOMS: namespace as never };

@@ -121,6 +121,9 @@ function createOnlineSession(initialState: GameState, localColor: PlayerColor = 
     selectMove: vi.fn(),
     requestRematch: vi.fn(),
     backToLobby: vi.fn(),
+    joinVoice: vi.fn(),
+    leaveVoice: vi.fn(),
+    setVoiceEnabled: vi.fn(),
     close: vi.fn(),
     emitGame(state: GameState) {
       listener?.({ type: 'game', state, turnTimeRemainingSeconds: 30 });
