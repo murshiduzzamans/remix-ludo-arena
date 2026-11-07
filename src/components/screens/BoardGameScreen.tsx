@@ -126,14 +126,58 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
     if (!onlineSession) return;
     return onlineSession.subscribe((event: RoomEvent) => {
       if (event.type === 'game') {
+        const previousState = stateRef.current;
+        const movedToken = event.state.players.flatMap((player) => {
+          const previousPlayer = previousState.players.find((item) => item.color === player.color);
+          if (!previousPlayer) return [];
+          return player.tokens.flatMap((token) => {
+            const previousToken = previousPlayer.tokens.find((item) => item.index === token.index);
+            return previousToken && token.stepCount > previousToken.stepCount
+              ? [{ color: player.color, tokenIndex: token.index, fromStep: previousToken.stepCount, toStep: token.stepCount }]
+              : [];
+          });
+        })[0];
+
         setOnlineError('');
         setTurnSecondsRemaining(event.turnTimeRemainingSeconds);
         stateRef.current = event.state;
         setGameState(event.state);
         setIsRolling(false);
-        setAnimatingToken(null);
         rollingRef.current = false;
-        movingRef.current = false;
+
+        if (movedToken) {
+          const steps = Array.from(
+            { length: movedToken.toStep - movedToken.fromStep },
+            (_, index) => movedToken.fromStep + index + 1
+          );
+          movingRef.current = true;
+          setAnimatingToken({
+            color: movedToken.color,
+            tokenIndex: movedToken.tokenIndex,
+            currentStep: steps[0],
+            isHopping: true,
+          });
+          let stepIndex = 1;
+          const animateNextStep = () => {
+            if (stepIndex >= steps.length) {
+              setAnimatingToken(null);
+              movingRef.current = false;
+              return;
+            }
+            setAnimatingToken({
+              color: movedToken.color,
+              tokenIndex: movedToken.tokenIndex,
+              currentStep: steps[stepIndex],
+              isHopping: true,
+            });
+            stepIndex += 1;
+            startTimer(animateNextStep, STEP_MS);
+          };
+          startTimer(animateNextStep, STEP_MS);
+        } else {
+          setAnimatingToken(null);
+          movingRef.current = false;
+        }
       } else if (event.type === 'room') {
         setRoomSnapshot(event.room);
         if (!event.room.isMatchInProgress && stateRef.current.phase === 'game_over') {
@@ -644,3 +688,4 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
     </div>
   );
 };
+
