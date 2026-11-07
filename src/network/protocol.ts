@@ -45,7 +45,15 @@ export interface RoomSnapshot {
   teamSwapRequest?: { id: string; requesterId: string; targetId: string; expiresAt: number } | null;
 }
 
-export interface OnlineTokenMove { id: string; color: PlayerColor; tokenIndex: number; fromStep: number; toStep: number }
+export interface OnlineCapturedToken { color: PlayerColor; tokenIndex: number; fromStep: number }
+export interface OnlineTokenMove {
+  id: string;
+  color: PlayerColor;
+  tokenIndex: number;
+  fromStep: number;
+  toStep: number;
+  capturedTokens?: OnlineCapturedToken[];
+}
 
 export type ServerMessage =
   | { type: 'SERVER_AUTHENTICATED'; payload: { roomCode: string } }

@@ -20,7 +20,7 @@ import {
 import { recordMatchOutcomeResilient } from '../../storage/profileStore';
 import { useGameTimer } from '../../hooks/useGameTimer';
 import type { OnlineRoomConnection, RoomEvent } from '../../network/onlineClient';
-import { AnimatingTokenInfo, LudoBoard } from '../board/LudoBoard';
+import { AnimatingCaptureInfo, AnimatingTokenInfo, LudoBoard } from '../board/LudoBoard';
 import { CornerPlayerPod, shortPlayerName } from '../game/CornerPlayerPod';
 import { ResultsModal } from './ResultsModal';
 
@@ -59,6 +59,7 @@ const NOMINAL_ROTATION_MAP: Record<PlayerColor, number> = {
 const ROLL_MS = 500; // dice tumble before the result lands
 const STEP_MS = 220; // let each one-square hop finish before the next begins
 const LAND_PAUSE_MS = 120; // short pause on the final square before the move commits
+const CAPTURE_ANIMATION_MS = 240;
 const BOT_ROLL_DELAY_MS = 650;
 const BOT_MOVE_DELAY_MS = 700;
 const AUTO_PASS_MS = 950;
@@ -102,6 +103,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
   const [isSoundMuted, setIsSoundMuted] = useState(() => sound.getMuted());
   const [isRolling, setIsRolling] = useState(false);
   const [animatingToken, setAnimatingToken] = useState<AnimatingTokenInfo | null>(null);
+  const [animatingCaptures, setAnimatingCaptures] = useState<AnimatingCaptureInfo[]>([]);
   const [onlineConnected, setOnlineConnected] = useState(Boolean(onlineSession));
   const [onlineError, setOnlineError] = useState('');
   const [turnSecondsRemaining, setTurnSecondsRemaining] = useState<number | null>(() => onlineSession ? 30 : null);
@@ -125,7 +127,34 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
     if (!onlineSession) return;
     const moveQueue: NonNullable<Extract<RoomEvent, { type: 'game' }>['move']>[] = [];
     let isAnimatingOnlineMove = false;
-    const playNextOnlineMove = () => {
+    let playNextOnlineMove: () => void;
+    const finishOnlineMove = (move: NonNullable<Extract<RoomEvent, { type: 'game' }>['move']>, captureIndex = 0) => {
+      const capturedToken = move.capturedTokens?.[captureIndex];
+      if (capturedToken) {
+        setAnimatingCaptures((current) => current.map((capture) =>
+          capture.moveId === move.id && capture.color === capturedToken.color && capture.tokenIndex === capturedToken.tokenIndex
+            ? { ...capture, isBeingCaptured: true }
+            : capture
+        ));
+        startTimer(() => {
+          setAnimatingCaptures((current) => current.filter((capture) =>
+            capture.moveId !== move.id || capture.color !== capturedToken.color || capture.tokenIndex !== capturedToken.tokenIndex
+          ));
+          finishOnlineMove(move, captureIndex + 1);
+        }, CAPTURE_ANIMATION_MS);
+        return;
+      }
+
+      if (moveQueue.length > 0) {
+        playNextOnlineMove();
+      } else {
+        isAnimatingOnlineMove = false;
+        movingRef.current = false;
+        setAnimatingToken(null);
+      }
+    };
+
+    playNextOnlineMove = () => {
       const move = moveQueue.shift();
       if (!move) {
         isAnimatingOnlineMove = false;
@@ -140,15 +169,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
       setAnimatingToken({ color: move.color, tokenIndex: move.tokenIndex, currentStep, isHopping: true });
       const animateNextStep = () => {
         if (currentStep >= move.toStep) {
-          startTimer(() => {
-            if (moveQueue.length > 0) {
-              playNextOnlineMove();
-            } else {
-              isAnimatingOnlineMove = false;
-              movingRef.current = false;
-              setAnimatingToken(null);
-            }
-          }, LAND_PAUSE_MS);
+          startTimer(() => finishOnlineMove(move), LAND_PAUSE_MS);
           return;
         }
         currentStep += 1;
@@ -165,6 +186,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         if (stateRef.current.id !== event.state.id) {
           cancelAllTimers();
           moveQueue.length = 0;
+          setAnimatingCaptures([]);
           isAnimatingOnlineMove = false;
           setAnimatingToken(null);
           movingRef.current = false;
@@ -175,6 +197,15 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         rollingRef.current = false;
 
         if (event.move) {
+          setAnimatingCaptures((current) => [
+            ...current,
+            ...(event.move!.capturedTokens ?? []).map((capturedToken) => ({
+              ...capturedToken,
+              currentStep: capturedToken.fromStep,
+              moveId: event.move!.id,
+              isBeingCaptured: false,
+            })),
+          ]);
           moveQueue.push(event.move);
           if (!isAnimatingOnlineMove) playNextOnlineMove();
         } else if (!isAnimatingOnlineMove) {
@@ -196,6 +227,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         if (!event.connected) {
           cancelAllTimers();
           moveQueue.length = 0;
+          setAnimatingCaptures([]);
           isAnimatingOnlineMove = false;
           setAnimatingToken(null);
           movingRef.current = false;
@@ -658,6 +690,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
             onTokenClick={handleTokenTap}
             interactiveColor={humanControlsTurn ? currentPlayer.color : null}
             animatingToken={animatingToken}
+            animatingCaptures={animatingCaptures}
             rotationDegrees={boardRotation}
           />
         </div>

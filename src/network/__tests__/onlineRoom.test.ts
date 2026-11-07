@@ -267,6 +267,51 @@ describe('online private rooms', () => {
     expect(sync.payload.state.currentTurnColor).toBe('red');
   });
 
+  it('broadcasts captured pawn positions with an online capture move', async () => {
+    const namespace = new MemoryNamespace();
+    const env = { LUDO_ROOMS: namespace as never };
+    const createdResponse = await worker.fetch(new Request('https://game.test/api/rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'classic_4p', playerName: 'Host', rules }),
+    }), env);
+    const host = await createdResponse.json() as { roomCode: string; participantId: string };
+    const entry = namespace.rooms.get(host.roomCode)!;
+    const stored = entry.state.storage.values.get('room') as {
+      isMatchInProgress: boolean;
+      gameState: ReturnType<typeof createInitialGameState> | null;
+      turnDeadline: number | null;
+    };
+    const game = createInitialGameState('classic_4p', 'red', undefined, rules);
+    const players = game.players.map((player) => {
+      if (player.color === 'red') {
+        return { ...player, tokens: player.tokens.map((token, index) => index === 0 ? { ...token, stepCount: 4, isInYard: false } : token) };
+      }
+      if (player.color === 'green') {
+        return { ...player, tokens: player.tokens.map((token, index) => index === 0 ? { ...token, stepCount: 44, isInYard: false } : token) };
+      }
+      return player;
+    });
+    const rolled = rollDice({ ...game, players }, 1);
+    if (!rolled.ok) throw new Error(rolled.error);
+    expect(rolled.state.legalMoves[0].willCaptureTokens).toHaveLength(1);
+    stored.isMatchInProgress = true;
+    stored.gameState = rolled.state;
+    stored.turnDeadline = Date.now() + 30_000;
+    entry.state.storage.values.set('room', stored);
+    entry.room = new LudoRoom(entry.state as never, { LUDO_ROOMS: namespace as never });
+    const hostSocket = new FakeSocket();
+    hostSocket.serializeAttachment({ participantId: host.participantId });
+    entry.state.acceptWebSocket(hostSocket);
+
+    await entry.room.webSocketMessage(hostSocket as never, JSON.stringify({
+      type: 'CLIENT_SELECT_MOVE', payload: { tokenIndex: 0, tokenColor: 'red' },
+    }));
+
+    const sync = hostSocket.sent.map((item) => JSON.parse(item)).reverse().find((message) => message.type === 'SERVER_GAME_STATE_SYNC');
+    expect(sync.payload.move.capturedTokens).toEqual([{ color: 'green', tokenIndex: 0, fromStep: 44 }]);
+    expect(sync.payload.state.players.find((player: { color: string }) => player.color === 'green').tokens[0].stepCount).toBe(-1);
+  });
+
   it('broadcasts movement metadata for bot moves to every connected client', async () => {
     const namespace = new MemoryNamespace();
     const env = { LUDO_ROOMS: namespace as never };

@@ -653,7 +653,14 @@ export class LudoRoom {
       room.gameState = result.state;
       await this.saveRoom();
       const moved = state.legalMoves.find((candidate) => candidate.tokenIndex === payload!.tokenIndex && candidate.tokenColor === (payload!.tokenColor ?? state.currentTurnColor));
-      this.broadcastGame(moved ? { id: crypto.randomUUID(), color: moved.tokenColor ?? state.currentTurnColor, tokenIndex: moved.tokenIndex, fromStep: moved.fromStep, toStep: moved.toStep } : undefined);
+      this.broadcastGame(moved ? {
+        id: crypto.randomUUID(),
+        color: moved.tokenColor ?? state.currentTurnColor,
+        tokenIndex: moved.tokenIndex,
+        fromStep: moved.fromStep,
+        toStep: moved.toStep,
+        capturedTokens: moved.willCaptureTokens.map((token) => ({ color: token.color, tokenIndex: token.index, fromStep: token.stepCount })),
+      } : undefined);
       await this.scheduleBotIfNeeded();
       return;
     }
@@ -734,6 +741,7 @@ export class LudoRoom {
             tokenIndex: move.tokenIndex,
             fromStep: move.fromStep,
             toStep: move.toStep,
+            capturedTokens: move.willCaptureTokens.map((token) => ({ color: token.color, tokenIndex: token.index, fromStep: token.stepCount })),
           };
         }
       }

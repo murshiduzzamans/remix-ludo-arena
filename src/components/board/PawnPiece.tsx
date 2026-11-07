@@ -17,6 +17,8 @@ interface PawnPieceProps {
   isSelected?: boolean;
   /** True while this pawn is hopping along its path */
   isAnimating?: boolean;
+  /** Fades a captured pawn before it returns to its yard */
+  isBeingCaptured?: boolean;
   /** Changes every square so the hop animation restarts for each step */
   stepKey: number;
   /** Board rotation in degrees; the pawn counter-rotates to stay upright */
@@ -38,6 +40,7 @@ export const PawnPiece: React.FC<PawnPieceProps> = ({
   isPlayable,
   isSelected = false,
   isAnimating = false,
+  isBeingCaptured = false,
   stepKey,
   boardRotation = 0,
   blockCount = 0,
@@ -55,8 +58,9 @@ export const PawnPiece: React.FC<PawnPieceProps> = ({
       style={{
         transform: `translate(${x}px, ${y}px)`,
         transition: isAnimating
-          ? 'transform 220ms linear'
-          : 'transform 280ms cubic-bezier(0.3, 0.7, 0.4, 1)',
+          ? 'transform 220ms linear, opacity 240ms ease-out'
+          : 'transform 280ms cubic-bezier(0.3, 0.7, 0.4, 1), opacity 240ms ease-out',
+        opacity: isBeingCaptured ? 0.15 : 1,
         pointerEvents: isPlayable ? 'all' : 'none',
         cursor: isPlayable ? 'pointer' : 'default',
       }}

@@ -18,6 +18,14 @@ export interface AnimatingTokenInfo {
   isHopping: boolean;
 }
 
+export interface AnimatingCaptureInfo {
+  color: PlayerColor;
+  tokenIndex: number;
+  currentStep: number;
+  moveId: string;
+  isBeingCaptured: boolean;
+}
+
 interface LudoBoardProps {
   gameState: GameState;
   onTokenClick?: (tokenIndex: number, color?: PlayerColor) => void;
@@ -25,6 +33,7 @@ interface LudoBoardProps {
   /** Colour the local player controls this turn; null means no tokens are tappable (bot turns) */
   interactiveColor?: PlayerColor | null;
   animatingToken?: AnimatingTokenInfo | null;
+  animatingCaptures?: AnimatingCaptureInfo[];
   rotationDegrees?: number;
 }
 
@@ -42,6 +51,7 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
   selectedTokenIndex = null,
   interactiveColor = null,
   animatingToken = null,
+  animatingCaptures = [],
   rotationDegrees = 0,
 }) => {
   const { players, currentTurnColor, phase, legalMoves } = gameState;
@@ -49,7 +59,7 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
   // Only the controlling player's turn makes tokens tappable (supports partner-assist moves too)
   const isTurnInteractive = interactiveColor !== null && currentTurnColor === interactiveColor;
   const playableActions =
-    phase === 'moving' && isTurnInteractive && !animatingToken
+    phase === 'moving' && isTurnInteractive && !animatingToken && animatingCaptures.length === 0
       ? legalMoves
       : [];
 
@@ -58,10 +68,10 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
 
   for (const player of players) {
     for (const token of player.tokens) {
-      const step =
-        animatingToken &&
-        animatingToken.color === player.color &&
-        animatingToken.tokenIndex === token.index
+      const capture = animatingCaptures.find((entry) => entry.color === player.color && entry.tokenIndex === token.index);
+      const step = capture
+        ? capture.currentStep
+        : animatingToken && animatingToken.color === player.color && animatingToken.tokenIndex === token.index
           ? animatingToken.currentStep
           : token.stepCount;
 
@@ -111,14 +121,13 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
               return (
                 <g key={`pawns-${player.color}`}>
                   {player.tokens.map((token) => {
+                    const captureAnimation = animatingCaptures.find((entry) => entry.color === player.color && entry.tokenIndex === token.index);
                     const isThisAnimating =
                       animatingToken !== null &&
                       animatingToken.color === player.color &&
                       animatingToken.tokenIndex === token.index;
 
-                    const stepToUse = isThisAnimating
-                      ? animatingToken.currentStep
-                      : token.stepCount;
+                    const stepToUse = captureAnimation?.currentStep ?? (isThisAnimating ? animatingToken.currentStep : token.stepCount);
 
                     const basePoint = getTokenCanvasPoint(player.color, stepToUse, token.index);
 
@@ -158,6 +167,7 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
                         isPlayable={isPlayable}
                         isSelected={isSelected}
                         isAnimating={isThisAnimating}
+                        isBeingCaptured={captureAnimation?.isBeingCaptured}
                         stepKey={stepToUse}
                         boardRotation={rotationDegrees}
                         blockCount={gameState.rules.blocksEnabled ? blockCount : 0}

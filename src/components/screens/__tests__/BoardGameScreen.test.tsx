@@ -4,15 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyMove, createInitialGameState, rollDice } from '../../../engine/gameEngine';
 import type { GameState, PlayerColor } from '../../../engine/types';
 import type { OnlineRoomConnection, RoomEvent } from '../../../network/onlineClient';
+import type { OnlineTokenMove } from '../../../network/protocol';
 import { BoardGameScreen } from '../BoardGameScreen';
 
 vi.mock('../../board/LudoBoard', () => ({
-  LudoBoard: ({ gameState, onTokenClick, animatingToken }: {
+  LudoBoard: ({ gameState, onTokenClick, animatingToken, animatingCaptures }: {
     gameState: GameState;
     onTokenClick: (tokenIndex: number, color: PlayerColor) => void;
     animatingToken?: { color: PlayerColor; tokenIndex: number; currentStep: number } | null;
+    animatingCaptures?: Array<{ color: PlayerColor; tokenIndex: number; currentStep: number; isBeingCaptured: boolean }>;
   }) => (
-    <div data-testid="board" data-step={animatingToken?.currentStep ?? gameState.players.find(p => p.color === 'red')?.tokens[0].stepCount}>
+    <div
+      data-testid="board"
+      data-step={animatingToken?.currentStep ?? gameState.players.find(p => p.color === 'red')?.tokens[0].stepCount}
+      data-capture-step={animatingCaptures?.[0]?.currentStep ?? gameState.players.find(p => p.color === 'green')?.tokens[0].stepCount}
+      data-capturing={animatingCaptures?.[0]?.isBeingCaptured ?? false}
+    >
       {gameState.legalMoves.map((move) => (
         <button
           key={`${move.tokenColor}-${move.tokenIndex}`}
@@ -118,7 +125,7 @@ function createOnlineSession(initialState: GameState, localColor: PlayerColor = 
     emitGame(state: GameState) {
       listener?.({ type: 'game', state, turnTimeRemainingSeconds: 30 });
     },
-    emitMove(state: GameState, move: { id: string; color: PlayerColor; tokenIndex: number; fromStep: number; toStep: number }) {
+    emitMove(state: GameState, move: OnlineTokenMove) {
       listener?.({ type: 'game', state, turnTimeRemainingSeconds: 30, move });
     },
   };
@@ -222,5 +229,37 @@ describe('BoardGameScreen single-move behavior', () => {
     act(() => vi.advanceTimersByTime(220));
     expect(screen.getByTestId('board')).toHaveAttribute('data-step', '14');
     expect(nextState.players.find(p => p.color === 'red')?.tokens[0].stepCount).toBe(14);
+  });
+
+  it.each(['red', 'green'] as const)('animates captured pawns for local player %s, including observers', (localColor) => {
+    const before = createSinglePawnState(3);
+    const move = before.legalMoves[0];
+    const applied = applyMove(before, { actorColor: 'red', tokenIndex: move.tokenIndex, tokenColor: 'red' });
+    if (!applied.ok) throw new Error(applied.error);
+    const stateAfterCapture: GameState = {
+      ...applied.state,
+      players: applied.state.players.map((player) => player.color === 'green'
+        ? { ...player, tokens: player.tokens.map((token) => token.index === 0 ? { ...token, stepCount: -1, isInYard: true } : token) }
+        : player),
+    };
+    const session = createOnlineSession(before, localColor);
+    render(<BoardGameScreen initialMode="classic_4p" onlineSession={session as unknown as OnlineRoomConnection} onExit={vi.fn()} />);
+
+    act(() => session.emitMove(stateAfterCapture, {
+      id: 'capture-move',
+      color: 'red',
+      tokenIndex: 0,
+      fromStep: 10,
+      toStep: 13,
+      capturedTokens: [{ color: 'green', tokenIndex: 0, fromStep: 44 }],
+    }));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-capture-step', '44');
+    act(() => vi.advanceTimersByTime(1000));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '13');
+    expect(screen.getByTestId('board')).toHaveAttribute('data-capture-step', '44');
+    expect(screen.getByTestId('board')).toHaveAttribute('data-capturing', 'true');
+    act(() => vi.advanceTimersByTime(240));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-capture-step', '-1');
+    expect(screen.getByTestId('board')).toHaveAttribute('data-capturing', 'false');
   });
 });
