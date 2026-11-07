@@ -1,17 +1,18 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInitialGameState, rollDice } from '../../../engine/gameEngine';
+import { applyMove, createInitialGameState, rollDice } from '../../../engine/gameEngine';
 import type { GameState, PlayerColor } from '../../../engine/types';
 import type { OnlineRoomConnection, RoomEvent } from '../../../network/onlineClient';
 import { BoardGameScreen } from '../BoardGameScreen';
 
 vi.mock('../../board/LudoBoard', () => ({
-  LudoBoard: ({ gameState, onTokenClick }: {
+  LudoBoard: ({ gameState, onTokenClick, animatingToken }: {
     gameState: GameState;
     onTokenClick: (tokenIndex: number, color: PlayerColor) => void;
+    animatingToken?: { color: PlayerColor; tokenIndex: number; currentStep: number } | null;
   }) => (
-    <div>
+    <div data-testid="board" data-step={animatingToken?.currentStep ?? gameState.players.find(p => p.color === 'red')?.tokens[0].stepCount}>
       {gameState.legalMoves.map((move) => (
         <button
           key={`${move.tokenColor}-${move.tokenIndex}`}
@@ -78,13 +79,13 @@ function createSinglePawnState(diceValue: number): GameState {
   return result.state;
 }
 
-function createOnlineSession(initialState: GameState) {
+function createOnlineSession(initialState: GameState, localColor: PlayerColor = 'red') {
   let listener: ((event: RoomEvent) => void) | undefined;
   const session = {
     roomCode: 'LUDO-ABC234',
     participantId: 'host-id',
     token: 'token',
-    localColor: 'red' as const,
+    localColor,
     currentGameState: initialState,
     currentRoom: {
       code: 'LUDO-ABC234',
@@ -116,6 +117,9 @@ function createOnlineSession(initialState: GameState) {
     close: vi.fn(),
     emitGame(state: GameState) {
       listener?.({ type: 'game', state, turnTimeRemainingSeconds: 30 });
+    },
+    emitMove(state: GameState, move: { id: string; color: PlayerColor; tokenIndex: number; fromStep: number; toStep: number }) {
+      listener?.({ type: 'game', state, turnTimeRemainingSeconds: 30, move });
     },
   };
   return session;
@@ -187,5 +191,22 @@ describe('BoardGameScreen single-move behavior', () => {
 
     fireEvent.click(screen.getByTestId('dice-red'));
     expect(session.selectMove).not.toHaveBeenCalled();
+  });
+
+  it.each(['red', 'green'] as const)('animates the authoritative move for local player %s, including observers', (localColor) => {
+    const before = createSinglePawnState(3);
+    const move = before.legalMoves[0];
+    const applied = applyMove(before, { actorColor: 'red', tokenIndex: move.tokenIndex, tokenColor: 'red' });
+    if (!applied.ok) throw new Error(applied.error);
+    const session = createOnlineSession(before, localColor);
+    render(<BoardGameScreen initialMode="classic_4p" onlineSession={session as unknown as OnlineRoomConnection} onExit={vi.fn()} />);
+
+    act(() => session.emitMove(applied.state, { id: 'move-1', color: 'red', tokenIndex: 0, fromStep: 10, toStep: 13 }));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '10');
+    act(() => vi.advanceTimersByTime(220));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '11');
+    act(() => vi.advanceTimersByTime(660));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '13');
+    expect(applied.state.players.find(p => p.color === 'red')?.tokens[0].stepCount).toBe(13);
   });
 });

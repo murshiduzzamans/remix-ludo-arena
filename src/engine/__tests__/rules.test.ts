@@ -146,6 +146,14 @@ describe('Rules - findCapturableToken', () => {
     const result = findCapturableToken(movingColor, 5, allPlayers, DEFAULT_RULES, true);
     expect(result).toBeNull();
   });
+
+  it('uses the current player team assignments after a live 2v2 switch', () => {
+    const red = { ...makePlayer('red', [makeToken('red', 0, 4)]), teamId: 'team_B' as const };
+    const yellow = { ...makePlayer('yellow', [makeToken('yellow', 0, 30)]), teamId: 'team_A' as const };
+    const blue = { ...makePlayer('blue', [makeToken('blue', 0, -1)]), teamId: 'team_B' as const };
+    expect(findCapturableToken('red', 4, [red, yellow, blue], DEFAULT_RULES, true)?.color).toBe('yellow');
+    expect(findCapturableToken('red', 4, [red, blue], DEFAULT_RULES, true)).toBeNull();
+  });
 });
 
 describe('Rules - hardened safe cells, captures, and blocks', () => {

@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { sound } from './audio/soundEffects';
 import { ActiveScreen, TopNavBar } from './components/navigation/TopNavBar';
 import { OfflineIndicator } from './components/pwa/PWAInstallBanner';
 import { BoardGameScreen } from './components/screens/BoardGameScreen';
@@ -19,6 +20,7 @@ import { OnlineRoomConnection, roomCodeFromUrl } from './network/onlineClient';
 import { loadSettings } from './storage/profileStore';
 
 export default function App() {
+  useEffect(() => { sound.setHapticsEnabled(loadSettings().hapticFeedback); }, []);
   const [inviteCode] = useState(() => roomCodeFromUrl());
   const [currentScreen, setCurrentScreen] = useState<ActiveScreen>(() => inviteCode ? 'room_lobby' : 'lobby');
   const [activeMode, setActiveMode] = useState<GameMode>('solo_bots');

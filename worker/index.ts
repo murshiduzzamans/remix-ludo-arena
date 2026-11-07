@@ -1,9 +1,9 @@
 import { chooseBotMove } from '../src/engine/botEngine';
-import { COLOR_ORDER } from '../src/engine/constants';
+import { COLOR_ORDER, COLOR_TEAMS } from '../src/engine/constants';
 import { advanceIfStuck, applyMove, createDiceSource, createInitialGameState, forfeitTimedOutTurn, getFairDiceRoll, rollDice } from '../src/engine/gameEngine';
 import { DEFAULT_RULES } from '../src/engine/gameEngine';
 import type { GameMode, GameRules, GameState, PlayerColor } from '../src/engine/types';
-import type { RoomParticipant, RoomSnapshot, ServerMessage } from '../src/network/protocol';
+import type { OnlineTokenMove, RoomParticipant, RoomSnapshot, ServerMessage } from '../src/network/protocol';
 
 interface Env {
   LUDO_ROOMS: DurableObjectNamespaceLike;
@@ -54,6 +54,7 @@ interface StoredRoom {
   gameState: GameState | null;
   turnDeadline?: number | null;
   rematchRequests?: string[];
+  teamSwapRequest?: { id: string; requesterId: string; targetId: string } | null;
 }
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -171,6 +172,7 @@ function roomSnapshot(room: StoredRoom): RoomSnapshot {
     maxPlayers: room.maxPlayers,
     isMatchInProgress: room.isMatchInProgress,
     rematchRequests: room.rematchRequests ?? [],
+    teamSwapRequest: room.teamSwapRequest ?? null,
   };
 }
 
@@ -191,6 +193,7 @@ function createRoomGame(room: StoredRoom): GameState {
       name: human?.name ?? `Bot ${player.color.toUpperCase()}`,
       isBot: !human,
       botPersonality: human ? undefined : 'balanced',
+      teamId: room.mode === 'team_2v2' ? (human?.teamId ?? COLOR_TEAMS[player.color]) : undefined,
     };
   });
   return state;
@@ -325,13 +328,14 @@ export class LudoRoom {
     if (this.room) this.broadcast({ type: 'SERVER_ROOM_STATE', payload: roomSnapshot(this.room) });
   }
 
-  private broadcastGame(): void {
+  private broadcastGame(move?: OnlineTokenMove): void {
     if (this.room?.gameState) {
       const now = Date.now();
       this.broadcast({
         type: 'SERVER_GAME_STATE_SYNC',
         payload: {
           state: this.room.gameState,
+          ...(move ? { move } : {}),
           serverTimestamp: now,
           turnTimeRemainingSeconds: Math.max(0, Math.ceil(((this.room.turnDeadline ?? now + TURN_TIMEOUT_MS) - now) / 1000)),
         },
@@ -353,7 +357,8 @@ export class LudoRoom {
       this.room = {
         code: String(body.code), hostId: host.id, mode: body.mode as StoredRoom['mode'],
         rules: normalizeRules(body.rules), participants: [host], maxPlayers: 4,
-        isMatchInProgress: false, gameState: null, turnDeadline: null, rematchRequests: [],
+        isMatchInProgress: false, gameState: null, turnDeadline: null, rematchRequests: [], teamSwapRequest: null,
+        ...(body.mode === 'team_2v2' ? { participants: [{ ...host, teamId: COLOR_TEAMS[host.color] }] } : {}),
       };
       await this.saveRoom();
       return json({ roomCode: this.room.code, token, participantId: host.id, room: roomSnapshot(this.room) }, 201);
@@ -381,6 +386,7 @@ export class LudoRoom {
         id: crypto.randomUUID(), name: String(body.playerName), color, isHost: false,
         isReady: false, isBot: false, pingMs: 0, isConnected: false, token: randomToken(),
       };
+      if (room.mode === 'team_2v2') participant.teamId = COLOR_TEAMS[color];
       room.participants.push(participant);
       await this.saveRoom();
       this.broadcastRoom();
@@ -468,6 +474,9 @@ export class LudoRoom {
         await this.ctx.storage.deleteAlarm();
       } else {
         room.participants = room.participants.filter((candidate) => candidate.id !== participant.id);
+        if (room.teamSwapRequest && (room.teamSwapRequest.requesterId === participant.id || room.teamSwapRequest.targetId === participant.id)) {
+          room.teamSwapRequest = null;
+        }
         if (room.gameState && room.gameState.phase !== 'game_over') {
           room.gameState.players = room.gameState.players.map((player) =>
             player.id === participant.id
@@ -501,6 +510,7 @@ export class LudoRoom {
       room.gameState = createRoomGame(room);
       room.isMatchInProgress = true;
       room.rematchRequests = [];
+      room.teamSwapRequest = null;
       await this.saveRoom();
       await this.scheduleBotIfNeeded();
       this.broadcastRoom();
@@ -551,10 +561,57 @@ export class LudoRoom {
       room.gameState = null;
       room.turnDeadline = null;
       room.rematchRequests = [];
+      room.teamSwapRequest = null;
       room.participants = room.participants.map((player) => ({ ...player, isReady: false }));
       await this.ctx.storage.deleteAlarm();
       await this.saveRoom();
       this.broadcastRoom();
+      return;
+    }
+
+    if (message.type === 'CLIENT_REQUEST_TEAM_SWAP') {
+      const payload = message.payload as { targetParticipantId?: unknown } | undefined;
+      const targetId = typeof payload?.targetParticipantId === 'string' ? payload.targetParticipantId : '';
+      const target = room.participants.find((candidate) => candidate.id === targetId);
+      const currentPlayer = room.gameState?.players.find((candidate) => candidate.id === participant.id);
+      const targetPlayer = room.gameState?.players.find((candidate) => candidate.id === targetId);
+      if (room.mode !== 'team_2v2' || !room.isMatchInProgress || !room.gameState || room.gameState.phase === 'game_over' || room.gameState.phase !== 'rolling') {
+        return this.send(socket, { type: 'SERVER_ERROR', payload: { code: 'TEAM_SWAP_UNAVAILABLE', message: 'Team changes are available between turns in a live 2v2 match.' } });
+      }
+      if (room.teamSwapRequest) return this.send(socket, { type: 'SERVER_ERROR', payload: { code: 'TEAM_SWAP_PENDING', message: 'A team change request is already waiting for a reply.' } });
+      if (!target || target.id === participant.id || !target.isConnected || target.isBot || !currentPlayer || !targetPlayer || currentPlayer.teamId === targetPlayer.teamId) {
+        return this.send(socket, { type: 'SERVER_ERROR', payload: { code: 'INVALID_TEAM_SWAP_TARGET', message: 'Choose a connected human player on the other team.' } });
+      }
+      room.teamSwapRequest = { id: crypto.randomUUID(), requesterId: participant.id, targetId };
+      await this.saveRoom();
+      this.broadcastRoom();
+      return;
+    }
+
+    if (message.type === 'CLIENT_RESPOND_TEAM_SWAP') {
+      const payload = message.payload as { requestId?: unknown; accept?: unknown } | undefined;
+      const request = room.teamSwapRequest;
+      if (!request || payload?.requestId !== request.id || request.targetId !== participant.id) {
+        return this.send(socket, { type: 'SERVER_ERROR', payload: { code: 'TEAM_SWAP_REQUEST_EXPIRED', message: 'This team change request is no longer available.' } });
+      }
+      const requester = room.participants.find((candidate) => candidate.id === request.requesterId);
+      const requesterPlayer = room.gameState?.players.find((candidate) => candidate.id === request.requesterId);
+      const targetPlayer = room.gameState?.players.find((candidate) => candidate.id === request.targetId);
+      const canApply = room.mode === 'team_2v2' && room.isMatchInProgress && room.gameState?.phase === 'rolling' && requester?.isConnected && requesterPlayer && targetPlayer && requesterPlayer.teamId !== targetPlayer.teamId;
+      if (payload?.accept === true && canApply) {
+        const requesterTeam = requesterPlayer.teamId;
+        const targetTeam = targetPlayer.teamId;
+        requesterPlayer.teamId = targetTeam;
+        targetPlayer.teamId = requesterTeam;
+        const requesterParticipant = room.participants.find((candidate) => candidate.id === request.requesterId)!;
+        const targetParticipant = room.participants.find((candidate) => candidate.id === request.targetId)!;
+        requesterParticipant.teamId = targetTeam;
+        targetParticipant.teamId = requesterTeam;
+      }
+      room.teamSwapRequest = null;
+      await this.saveRoom();
+      this.broadcastRoom();
+      if (payload?.accept === true && canApply) this.broadcastGame();
       return;
     }
 
@@ -582,8 +639,9 @@ export class LudoRoom {
       if (!result.ok) return this.send(socket, { type: 'SERVER_ERROR', payload: { code: result.error, message: 'Choose one of the highlighted tokens.' } });
       room.gameState = result.state;
       await this.saveRoom();
+      const moved = state.legalMoves.find((candidate) => candidate.tokenIndex === payload!.tokenIndex && candidate.tokenColor === (payload!.tokenColor ?? state.currentTurnColor));
+      this.broadcastGame(moved ? { id: crypto.randomUUID(), color: moved.tokenColor ?? state.currentTurnColor, tokenIndex: moved.tokenIndex, fromStep: moved.fromStep, toStep: moved.toStep } : undefined);
       await this.scheduleBotIfNeeded();
-      this.broadcastGame();
       return;
     }
 
@@ -597,6 +655,9 @@ export class LudoRoom {
     const participant = room?.participants.find((candidate) => candidate.id === attachment?.participantId);
     if (participant) {
       participant.isConnected = false;
+      if (room?.teamSwapRequest && (room.teamSwapRequest.requesterId === participant.id || room.teamSwapRequest.targetId === participant.id)) {
+        room.teamSwapRequest = null;
+      }
       await this.saveRoom();
       this.broadcastRoom();
       await this.scheduleBotIfNeeded(false);

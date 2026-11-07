@@ -16,6 +16,14 @@ function trackIndex(color: PlayerColor, step: number): number {
   return (COLOR_START_TRACK_INDEX[color] + step) % TOTAL_TRACK_CELLS;
 }
 
+function areTeammates(colorA: PlayerColor, colorB: PlayerColor, players: Player[], isTeamMode: boolean): boolean {
+  if (!isTeamMode) return false;
+  const playerA = players.find((player) => player.color === colorA);
+  const playerB = players.find((player) => player.color === colorB);
+  if (playerA?.teamId !== undefined && playerB?.teamId !== undefined) return playerA.teamId === playerB.teamId;
+  return COLOR_TEAMS[colorA] === COLOR_TEAMS[colorB];
+}
+
 function isCellThreatened(
   targetTrackIdx: number,
   movingColor: PlayerColor,
@@ -26,7 +34,7 @@ function isCellThreatened(
   if (isSafeCell(targetTrackIdx, rules)) return false;
   for (const opponent of allPlayers) {
     if (opponent.color === movingColor) continue;
-    if (isTeamMode && COLOR_TEAMS[opponent.color] === COLOR_TEAMS[movingColor]) continue;
+    if (areTeammates(opponent.color, movingColor, allPlayers, isTeamMode)) continue;
     for (const token of opponent.tokens) {
       if (token.stepCount < 0 || token.stepCount > LAST_TRACK_STEP) continue;
       const opponentCell = trackIndex(opponent.color, token.stepCount);
@@ -37,7 +45,7 @@ function isCellThreatened(
         for (let step = 1; step < distance; step += 1) {
           const cell = (opponentCell + step) % TOTAL_TRACK_CELLS;
           const blockCount = allPlayers.reduce((total, player) => {
-            if (player.color === opponent.color || isTeamMode && COLOR_TEAMS[player.color] === COLOR_TEAMS[opponent.color]) return total;
+            if (player.color === opponent.color || areTeammates(player.color, opponent.color, allPlayers, isTeamMode)) return total;
             return total + player.tokens.filter((other) => other.stepCount >= 0 && other.stepCount <= LAST_TRACK_STEP && trackIndex(other.color, other.stepCount) === cell).length;
           }, 0);
           if (blockCount >= 2) { blocked = true; break; }
@@ -106,7 +114,7 @@ export function chooseBotMove(
       // Exposed lanes are risky; distance-six attackers receive double weight.
       let risk = 0;
       for (const opponent of allPlayers) {
-        if (opponent.color === color || isTeamMode && COLOR_TEAMS[opponent.color] === COLOR_TEAMS[color]) continue;
+        if (opponent.color === color || areTeammates(opponent.color, color, allPlayers, isTeamMode)) continue;
         for (const token of opponent.tokens) {
           if (token.stepCount < 0 || token.stepCount > LAST_TRACK_STEP) continue;
           const from = trackIndex(opponent.color, token.stepCount);

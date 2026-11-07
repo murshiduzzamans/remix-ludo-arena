@@ -16,6 +16,8 @@ export type ClientMessage =
   | { type: 'CLIENT_BACK_TO_LOBBY' }
   | { type: 'CLIENT_ROLL_DICE' }
   | { type: 'CLIENT_SELECT_MOVE'; payload: { tokenIndex: number; tokenColor?: PlayerColor } }
+  | { type: 'CLIENT_REQUEST_TEAM_SWAP'; payload: { targetParticipantId: string } }
+  | { type: 'CLIENT_RESPOND_TEAM_SWAP'; payload: { requestId: string; accept: boolean } }
   | { type: 'CLIENT_LEAVE_ROOM' }
   | { type: 'CLIENT_PING'; payload: { clientTimestamp: number } };
 
@@ -40,7 +42,10 @@ export interface RoomSnapshot {
   maxPlayers: number;
   isMatchInProgress: boolean;
   rematchRequests?: string[];
+  teamSwapRequest?: { id: string; requesterId: string; targetId: string } | null;
 }
+
+export interface OnlineTokenMove { id: string; color: PlayerColor; tokenIndex: number; fromStep: number; toStep: number }
 
 export type ServerMessage =
   | { type: 'SERVER_AUTHENTICATED'; payload: { roomCode: string } }
@@ -51,7 +56,7 @@ export type ServerMessage =
     }
   | {
       type: 'SERVER_GAME_STATE_SYNC';
-      payload: { state: GameState; serverTimestamp: number; turnTimeRemainingSeconds: number };
+      payload: { state: GameState; serverTimestamp: number; turnTimeRemainingSeconds: number; move?: OnlineTokenMove };
     }
   | { type: 'SERVER_TURN_TIMEOUT'; payload: { timedOutColor: PlayerColor; autoPickedTokenIndex?: number } }
   | { type: 'SERVER_PLAYER_DISCONNECTED'; payload: { playerId: string; color: PlayerColor; reconnectGracePeriodSeconds: number } }

@@ -287,6 +287,14 @@ describe('ProfileStore - safeLoadProfile', () => {
 });
 
 describe('ProfileStore - safeLoadSettings', () => {
+  it('defaults vibration to off and persists a user choice', async () => {
+    const { DEFAULT_SETTINGS, loadSettings, saveSettings } = await import('../profileStore');
+    expect(DEFAULT_SETTINGS.hapticFeedback).toBe(false);
+    expect(loadSettings().hapticFeedback).toBe(false);
+    saveSettings({ ...DEFAULT_SETTINGS, hapticFeedback: true });
+    expect(loadSettings().hapticFeedback).toBe(true);
+  });
+
   it('returns DEFAULT_SETTINGS for invalid JSON', () => {
     localStorageMock['ludo_arena_settings_v1'] = 'not-json';
     const settings = safeLoadSettings();

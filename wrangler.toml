@@ -20,6 +20,13 @@ name = "JOIN_ROOM_LIMITER"
 namespace_id = "7415023862"
 simple = { limit = 10, period = 60 }
 
+# Preview deployments receive isolated Durable Object storage. Omitting the
+# production rate-limit bindings keeps preview actions separate from production.
+[previews.durable_objects]
+[[previews.durable_objects.bindings]]
+name = "LUDO_ROOMS"
+class_name = "LudoRoom"
+
 [dev]
 ip = "0.0.0.0"
 

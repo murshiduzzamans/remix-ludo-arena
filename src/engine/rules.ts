@@ -37,8 +37,10 @@ function trackIndex(color: PlayerColor, step: number): number {
   return (COLOR_START_TRACK_INDEX[color] + step) % TOTAL_TRACK_CELLS;
 }
 
-function teammates(colorA: PlayerColor, colorB: PlayerColor, isTeamMode: boolean): boolean {
-  return isTeamMode && COLOR_TEAMS[colorA] === COLOR_TEAMS[colorB];
+function teammates(playerA: Player, playerB: Player, isTeamMode: boolean): boolean {
+  if (!isTeamMode) return false;
+  if (playerA.teamId !== undefined && playerB.teamId !== undefined) return playerA.teamId === playerB.teamId;
+  return COLOR_TEAMS[playerA.color] === COLOR_TEAMS[playerB.color];
 }
 
 function tokensAtTrackCell(allPlayers: Player[], idx: number): Array<{ player: Player; token: TokenState }> {
@@ -55,8 +57,9 @@ function tokensAtTrackCell(allPlayers: Player[], idx: number): Array<{ player: P
 
 function isOpponentBlockAt(allPlayers: Player[], idx: number, movingColor: PlayerColor, isTeamMode: boolean): boolean {
   const counts = new Map<PlayerColor, number>();
+  const movingPlayer = allPlayers.find((player) => player.color === movingColor) ?? { color: movingColor } as Player;
   for (const { player } of tokensAtTrackCell(allPlayers, idx)) {
-    if (player.color !== movingColor && !teammates(player.color, movingColor, isTeamMode)) {
+    if (player.color !== movingColor && !teammates(player, movingPlayer, isTeamMode)) {
       counts.set(player.color, (counts.get(player.color) ?? 0) + 1);
     }
   }
@@ -82,8 +85,9 @@ export function findCapturableTokens(
   const idx = trackIndex(movingColor, targetStep);
   if (isSafeCell(idx, rules) || rules.blocksEnabled && isOpponentBlockAt(allPlayers, idx, movingColor, isTeamMode)) return [];
 
+  const movingPlayer = allPlayers.find((player) => player.color === movingColor) ?? { color: movingColor } as Player;
   const occupants = tokensAtTrackCell(allPlayers, idx).filter(({ player }) =>
-    player.color !== movingColor && !teammates(player.color, movingColor, isTeamMode)
+    player.color !== movingColor && !teammates(player, movingPlayer, isTeamMode)
   );
   if (occupants.length === 0) return [];
   const targetColor = occupants[0].player.color;

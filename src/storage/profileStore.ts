@@ -43,6 +43,7 @@ export interface AppSettings {
 const PROFILE_KEY = 'ludo_arena_profile_v1';
 const HISTORY_KEY = 'ludo_arena_history_v1';
 const SETTINGS_KEY = 'ludo_arena_settings_v1';
+const HAPTIC_DEFAULT_MIGRATION_KEY = 'ludo_arena_haptics_default_off_v1';
 const IDEMPOTENCY_KEY = 'ludo_arena_idempotency_v1';
 const RESULT_STATE_KEY = 'ludo_arena_result_state_v2';
 
@@ -361,7 +362,7 @@ export function atomicUpdateProfile(updater: (p: UserProfile) => UserProfile): U
 export const DEFAULT_SETTINGS: AppSettings = {
   soundEnabled: true,
   soundVolume: 0.6,
-  hapticFeedback: true,
+  hapticFeedback: false,
   fastAnimations: false,
   rules: DEFAULT_RULES,
 };
@@ -509,10 +510,22 @@ export function safeLoadSettings(): AppSettings {
   if (typeof window === 'undefined') return DEFAULT_SETTINGS;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
+    if (!raw) {
+      localStorage.setItem(HAPTIC_DEFAULT_MIGRATION_KEY, '1');
+      return DEFAULT_SETTINGS;
+    }
     const parsed = JSON.parse(raw);
     const result = validateSettings(parsed);
-    return result.ok ? result.value : DEFAULT_SETTINGS;
+    if (!result.ok) return DEFAULT_SETTINGS;
+    if (!localStorage.getItem(HAPTIC_DEFAULT_MIGRATION_KEY)) {
+      localStorage.setItem(HAPTIC_DEFAULT_MIGRATION_KEY, '1');
+      if (result.value.hapticFeedback) {
+        const migrated = { ...result.value, hapticFeedback: false };
+        saveSettings(migrated);
+        return migrated;
+      }
+    }
+    return result.value;
   } catch {
     return DEFAULT_SETTINGS;
   }

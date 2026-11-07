@@ -1,5 +1,5 @@
 import type { GameRules, GameState, PlayerColor } from '../engine/types';
-import type { RoomSnapshot, ServerMessage } from './protocol';
+import type { OnlineTokenMove, RoomSnapshot, ServerMessage } from './protocol';
 
 const API_URL = (
   import.meta.env.VITE_MULTIPLAYER_API_URL ||
@@ -21,7 +21,7 @@ interface RoomCredentials {
 
 export type RoomEvent =
   | { type: 'room'; room: RoomSnapshot }
-  | { type: 'game'; state: GameState; turnTimeRemainingSeconds: number }
+  | { type: 'game'; state: GameState; turnTimeRemainingSeconds: number; move?: OnlineTokenMove }
   | { type: 'timeout'; color: PlayerColor }
   | { type: 'error'; message: string }
   | { type: 'connection'; connected: boolean };
@@ -40,6 +40,7 @@ export class OnlineRoomConnection {
   private roomSnapshot: RoomSnapshot;
   private gameSnapshot: GameState | null = null;
   private turnTimeRemainingSeconds = 30;
+  private seenMoveIds = new Set<string>();
 
   get currentRoom(): RoomSnapshot {
     return this.roomSnapshot;
@@ -199,7 +200,14 @@ export class OnlineRoomConnection {
     } else if (message.type === 'SERVER_GAME_STATE_SYNC') {
       this.gameSnapshot = message.payload.state;
       this.turnTimeRemainingSeconds = message.payload.turnTimeRemainingSeconds;
-      this.emit({ type: 'game', state: message.payload.state, turnTimeRemainingSeconds: message.payload.turnTimeRemainingSeconds });
+      const move = message.payload.move;
+      if (move && this.seenMoveIds.has(move.id)) return;
+      if (move) {
+        this.seenMoveIds.add(move.id);
+        if (this.seenMoveIds.size > 64) this.seenMoveIds.delete(this.seenMoveIds.values().next().value!);
+      }
+      const freshMove = move;
+      this.emit({ type: 'game', state: message.payload.state, turnTimeRemainingSeconds: message.payload.turnTimeRemainingSeconds, ...(freshMove ? { move: freshMove } : {}) });
     } else if (message.type === 'SERVER_TURN_TIMEOUT') {
       this.emit({ type: 'timeout', color: message.payload.timedOutColor });
     } else if (message.type === 'SERVER_ERROR') {
@@ -248,6 +256,14 @@ export class OnlineRoomConnection {
 
   selectMove(tokenIndex: number, tokenColor?: PlayerColor): void {
     this.send('CLIENT_SELECT_MOVE', { tokenIndex, tokenColor });
+  }
+
+  requestTeamSwap(targetParticipantId: string): void {
+    this.send('CLIENT_REQUEST_TEAM_SWAP', { targetParticipantId });
+  }
+
+  respondToTeamSwap(requestId: string, accept: boolean): void {
+    this.send('CLIENT_RESPOND_TEAM_SWAP', { requestId, accept });
   }
 
   close(): void {

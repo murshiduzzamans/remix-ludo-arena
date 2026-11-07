@@ -8,6 +8,7 @@ class SoundSynthesizer {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
   private volume: number = 0.6;
+  private hapticsEnabled = false;
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -24,12 +25,15 @@ class SoundSynthesizer {
   }
 
   public triggerHaptic(pattern: number | number[] = 25) {
-    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+    if (!this.hapticsEnabled || typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+    if (typeof window !== 'undefined') {
       try {
         navigator.vibrate(pattern);
       } catch {}
     }
   }
+
+  public setHapticsEnabled(enabled: boolean) { this.hapticsEnabled = enabled; }
 
   public setMuted(muted: boolean) {
     this.isMuted = muted;

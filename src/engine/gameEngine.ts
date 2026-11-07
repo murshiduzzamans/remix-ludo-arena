@@ -755,10 +755,11 @@ export function getGameInvariantViolations(state: GameState): string[] {
   for (const [cell, colors] of occupants) {
     const unique = [...new Set(colors)];
     const safe = state.rules.startSquaresAlwaysSafe && START_TRACK_CELLS.has(cell) || state.rules.safeStarsActive && STAR_TRACK_CELLS.has(cell);
-    if (!safe && unique.length > 1 && (!state.isTeamMode || unique.some((color) => COLOR_TEAMS[color] !== COLOR_TEAMS[unique[0]]))) {
+    const teamOf = (color: PlayerColor) => state.players.find((player) => player.color === color)?.teamId ?? COLOR_TEAMS[color];
+    if (!safe && unique.length > 1 && (!state.isTeamMode || unique.some((color) => teamOf(color) !== teamOf(unique[0])))) {
       violations.push(`cell ${cell}: opposing colors share an unsafe cell`);
     }
-    if (state.rules.blocksEnabled && unique.length > 1 && (!state.isTeamMode || unique.some((color) => COLOR_TEAMS[color] !== COLOR_TEAMS[unique[0]]))) {
+    if (state.rules.blocksEnabled && unique.length > 1 && (!state.isTeamMode || unique.some((color) => teamOf(color) !== teamOf(unique[0])))) {
       violations.push(`cell ${cell}: opponents share a block`);
     }
   }
