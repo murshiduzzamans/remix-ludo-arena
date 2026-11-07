@@ -68,8 +68,9 @@
 ## 6. Two-versus-Two (2v2) Team Ludo Rules
 
 1. **Team Pairings**:
-   - **Team Alpha**: Red (Player 1) + Yellow (Player 3).
-   - **Team Omega**: Green (Player 2) + Blue (Player 4).
+   - Default **Team Alpha**: Red (Player 1) + Yellow (Player 3).
+   - Default **Team Omega**: Green (Player 2) + Blue (Player 4).
+   - Before the match starts, players may request a team swap with a connected player on the opposing team in the room lobby. The invited player must accept; seat colors and turn order remain unchanged.
 2. **Partner Immunity**:
    - Teammates **cannot capture each other**. Landing on a teammate's square simply creates a shared cooperative stack.
 3. **Team Victory Condition**:

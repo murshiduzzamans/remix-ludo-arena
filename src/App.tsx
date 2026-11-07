@@ -118,6 +118,9 @@ export default function App() {
             onExit={() => {
               onlineSession?.close();
               setOnlineSession(null);
+              const url = new URL(window.location.href);
+              url.searchParams.delete('room');
+              window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
               setCurrentScreen('lobby');
             }}
             onBackToRoom={() => setCurrentScreen('room_lobby')}

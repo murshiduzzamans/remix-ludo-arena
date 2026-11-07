@@ -32,6 +32,8 @@ type ClientMessage =
   | { type: 'CLIENT_BACK_TO_LOBBY' }
   | { type: 'CLIENT_ROLL_DICE' }
   | { type: 'CLIENT_SELECT_MOVE'; payload: { tokenIndex: number; tokenColor?: PlayerColor } }
+  | { type: 'CLIENT_REQUEST_TEAM_SWAP'; payload: { targetParticipantId: string } }
+  | { type: 'CLIENT_RESPOND_TEAM_SWAP'; payload: { requestId: string; accept: boolean } }
   | { type: 'CLIENT_LEAVE_ROOM' }
   | { type: 'CLIENT_PING'; payload: { clientTimestamp: number } };
 ```
@@ -83,6 +85,13 @@ Submits a chosen token index for legal movement.
 }
 ```
 
+#### 7. Team switch requests
+In a 2v2 room lobby, a player may request a team swap with a connected human on the opposing team. The invited player must accept. Requests expire after 30 seconds; matches cannot start while a request is pending. Team membership changes but seat colors and turn order do not. Team switching is unavailable after the match starts.
+```json
+{ "type": "CLIENT_REQUEST_TEAM_SWAP", "payload": { "targetParticipantId": "usr-2" } }
+{ "type": "CLIENT_RESPOND_TEAM_SWAP", "payload": { "requestId": "req-1", "accept": true } }
+```
+
 `CLIENT_LEAVE_ROOM` closes the room for everyone when sent by the host; another player leaving frees their seat. `CLIENT_PING` is the heartbeat message.
 
 ---
@@ -90,7 +99,7 @@ Submits a chosen token index for legal movement.
 ## 3. Server-to-Client Message Schemas
 
 #### 1. `SERVER_ROOM_STATE`
-Dispatched whenever room participants join, change ready state, request a rematch, or the room returns to its lobby. The payload includes `rematchRequests`, the participant IDs that have requested a rematch.
+Dispatched whenever room participants join, change ready state or team, request a rematch, or the room returns to its lobby. The payload includes `rematchRequests` and any pending `teamSwapRequest`.
 ```json
 {
   "type": "SERVER_ROOM_STATE",
@@ -117,7 +126,7 @@ Dispatched whenever room participants join, change ready state, request a rematc
 ```
 
 #### 2. `SERVER_GAME_STATE_SYNC`
-Dispatched whenever turn state mutates. Contains the full authoritative `GameState`.
+Dispatched whenever turn state mutates. Contains the full authoritative `GameState`; token moves also include authoritative move metadata so every client can animate the same path, including server-controlled bot moves.
 ```json
 {
   "type": "SERVER_GAME_STATE_SYNC",

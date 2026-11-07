@@ -76,11 +76,25 @@ export class OnlineRoomConnection {
   static async join(roomCodeInput: string, playerName: string): Promise<OnlineRoomConnection> {
     const roomCode = roomCodeInput.trim().toUpperCase().replace(/\s+/g, '');
     if (!roomCode) throw new Error('Enter a room code or open your friend’s invite link.');
-    let savedToken: string | null = null;
-    try { savedToken = window.localStorage.getItem(this.tokenKey(roomCode)); } catch { /* Continue as a new room guest. */ }
+    return this.joinWithToken(roomCode, playerName, this.getSavedToken(roomCode) ?? undefined);
+  }
+
+  static async reconnect(roomCodeInput: string, playerName: string): Promise<OnlineRoomConnection | null> {
+    const roomCode = roomCodeInput.trim().toUpperCase().replace(/\s+/g, '');
+    if (!roomCode) return null;
+    const savedToken = this.getSavedToken(roomCode);
+    if (!savedToken) return null;
+    return this.joinWithToken(roomCode, playerName, savedToken);
+  }
+
+  private static getSavedToken(roomCode: string): string | null {
+    try { return window.localStorage.getItem(this.tokenKey(roomCode)); } catch { return null; }
+  }
+
+  private static async joinWithToken(roomCode: string, playerName: string, token?: string): Promise<OnlineRoomConnection> {
     const credentials = await this.request(`/api/rooms/${encodeURIComponent(roomCode)}/join`, {
       method: 'POST',
-      body: JSON.stringify({ playerName, token: savedToken ?? undefined }),
+      body: JSON.stringify({ playerName, token }),
     });
     try { window.localStorage.setItem(this.tokenKey(credentials.roomCode), credentials.token); } catch { /* The live connection still works for this tab. */ }
     const connection = new OnlineRoomConnection(credentials);

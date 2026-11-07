@@ -137,7 +137,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
           {/* Volume Slider (if sound on) */}
           <div className="p-2.5 rounded-xl bg-[#003080] border border-sky-400/30 flex items-center justify-between">
             <div><span className="text-xs font-black text-white block">Vibration</span><span className="text-[9px] font-bold text-sky-300">Dice and token movement</span></div>
-            <button type="button" role="switch" aria-checked={settings.hapticFeedback} onClick={handleToggleVibration} className={`min-h-[44px] px-3 rounded-lg border font-black text-xs ${settings.hapticFeedback ? 'bg-[#FFD200] text-[#072468] border-white shadow' : 'bg-[#002060] text-slate-400 border-sky-500/30'}`}>{settings.hapticFeedback ? 'ON' : 'OFF'}</button>
+            <button type="button" role="switch" aria-label="Vibration" aria-checked={settings.hapticFeedback} onClick={handleToggleVibration} className={`min-h-[44px] px-3 rounded-lg border font-black text-xs ${settings.hapticFeedback ? 'bg-[#FFD200] text-[#072468] border-white shadow' : 'bg-[#002060] text-slate-400 border-sky-500/30'}`}>{settings.hapticFeedback ? 'ON' : 'OFF'}</button>
           </div>
 
           {settings.soundEnabled && (

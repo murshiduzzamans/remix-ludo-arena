@@ -42,7 +42,7 @@ export interface RoomSnapshot {
   maxPlayers: number;
   isMatchInProgress: boolean;
   rematchRequests?: string[];
-  teamSwapRequest?: { id: string; requesterId: string; targetId: string } | null;
+  teamSwapRequest?: { id: string; requesterId: string; targetId: string; expiresAt: number } | null;
 }
 
 export interface OnlineTokenMove { id: string; color: PlayerColor; tokenIndex: number; fromStep: number; toStep: number }

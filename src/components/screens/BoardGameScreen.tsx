@@ -123,41 +123,61 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
 
   useEffect(() => {
     if (!onlineSession) return;
+    const moveQueue: NonNullable<Extract<RoomEvent, { type: 'game' }>['move']>[] = [];
+    let isAnimatingOnlineMove = false;
+    const playNextOnlineMove = () => {
+      const move = moveQueue.shift();
+      if (!move) {
+        isAnimatingOnlineMove = false;
+        movingRef.current = false;
+        setAnimatingToken(null);
+        return;
+      }
+
+      isAnimatingOnlineMove = true;
+      movingRef.current = true;
+      let currentStep = move.fromStep;
+      setAnimatingToken({ color: move.color, tokenIndex: move.tokenIndex, currentStep, isHopping: true });
+      const animateNextStep = () => {
+        if (currentStep >= move.toStep) {
+          startTimer(() => {
+            if (moveQueue.length > 0) {
+              playNextOnlineMove();
+            } else {
+              isAnimatingOnlineMove = false;
+              movingRef.current = false;
+              setAnimatingToken(null);
+            }
+          }, LAND_PAUSE_MS);
+          return;
+        }
+        currentStep += 1;
+        setAnimatingToken({ color: move.color, tokenIndex: move.tokenIndex, currentStep, isHopping: true });
+        startTimer(animateNextStep, STEP_MS);
+      };
+      startTimer(animateNextStep, STEP_MS);
+    };
+
     return onlineSession.subscribe((event: RoomEvent) => {
       if (event.type === 'game') {
         setOnlineError('');
         setTurnSecondsRemaining(event.turnTimeRemainingSeconds);
+        if (stateRef.current.id !== event.state.id) {
+          cancelAllTimers();
+          moveQueue.length = 0;
+          isAnimatingOnlineMove = false;
+          setAnimatingToken(null);
+          movingRef.current = false;
+        }
         stateRef.current = event.state;
         setGameState(event.state);
         setIsRolling(false);
         rollingRef.current = false;
 
         if (event.move) {
-          movingRef.current = true;
-          setAnimatingToken({
-            color: event.move.color,
-            tokenIndex: event.move.tokenIndex,
-            currentStep: event.move.fromStep,
-            isHopping: true,
-          });
-          let currentStep = event.move.fromStep;
-          const animateNextStep = () => {
-            if (currentStep >= event.move!.toStep) {
-              setAnimatingToken(null);
-              movingRef.current = false;
-              return;
-            }
-            currentStep += 1;
-            setAnimatingToken({
-              color: event.move!.color,
-              tokenIndex: event.move!.tokenIndex,
-              currentStep,
-              isHopping: true,
-            });
-            startTimer(animateNextStep, STEP_MS);
-          };
-          startTimer(animateNextStep, STEP_MS);
-        } else {
+          moveQueue.push(event.move);
+          if (!isAnimatingOnlineMove) playNextOnlineMove();
+        } else if (!isAnimatingOnlineMove) {
           setAnimatingToken(null);
           movingRef.current = false;
         }
@@ -170,11 +190,13 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         setOnlineError(event.message);
         setIsRolling(false);
         rollingRef.current = false;
-        movingRef.current = false;
+        if (!isAnimatingOnlineMove) movingRef.current = false;
       } else if (event.type === 'connection') {
         setOnlineConnected(event.connected);
         if (!event.connected) {
           cancelAllTimers();
+          moveQueue.length = 0;
+          isAnimatingOnlineMove = false;
           setAnimatingToken(null);
           movingRef.current = false;
         }
@@ -473,16 +495,6 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
   const connectedHumanCount = roomSnapshot?.participants.filter(
     (participant) => !participant.isBot && participant.isConnected
   ).length ?? 0;
-  const myParticipant = roomSnapshot?.participants.find((player) => player.id === onlineSession?.participantId);
-  const myTeamId = gameState.players.find((player) => player.id === onlineSession?.participantId)?.teamId;
-  const pendingTeamSwap = roomSnapshot?.teamSwapRequest ?? null;
-  const teamSwapTarget = pendingTeamSwap?.targetId === onlineSession?.participantId;
-  const teamSwapRequester = roomSnapshot?.participants.find((player) => player.id === pendingTeamSwap?.requesterId);
-  const swapCandidates = roomSnapshot?.participants.filter((participant) => {
-    const player = gameState.players.find((candidate) => candidate.id === participant.id);
-    return participant.id !== myParticipant?.id && participant.isConnected && !participant.isBot &&
-      player?.teamId !== undefined && myTeamId !== undefined && player.teamId !== myTeamId;
-  }) ?? [];
   const handleExitResults = () => {
     if (onlineSession && isRoomHost) {
       onlineSession.backToLobby();
@@ -631,31 +643,6 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
           </button>
         </div>
       </header>
-
-      {onlineSession && gameState.isTeamMode && gameState.phase !== 'game_over' && (
-        <section className="w-full max-w-[450px] mx-auto px-2" aria-label="Team changes">
-          {teamSwapTarget && pendingTeamSwap && teamSwapRequester ? (
-            <div className="rounded-xl border border-amber-300/70 bg-slate-950/90 p-3 text-center text-white shadow-lg" role="dialog" aria-label="Team change request">
-              <p className="text-sm font-bold">{teamSwapRequester.name} wants to switch teams with you.</p>
-              <div className="mt-2 flex justify-center gap-2">
-                <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold" onClick={() => onlineSession.respondToTeamSwap(pendingTeamSwap.id, true)}>Accept</button>
-                <button className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-bold" onClick={() => onlineSession.respondToTeamSwap(pendingTeamSwap.id, false)}>Decline</button>
-              </div>
-            </div>
-          ) : pendingTeamSwap?.requesterId === onlineSession.participantId ? (
-            <p className="rounded-xl border border-sky-300/50 bg-slate-950/80 p-2 text-center text-xs font-semibold text-sky-100" role="status">Waiting for {roomSnapshot?.participants.find((player) => player.id === pendingTeamSwap.targetId)?.name ?? 'your friend'} to reply to your team change request.</p>
-          ) : !pendingTeamSwap && gameState.phase === 'rolling' && myTeamId && (
-            <div className="flex flex-wrap items-center justify-center gap-2 py-1">
-              <span className="text-xs font-bold text-white">You are on Team {myTeamId === 'team_A' ? 'A' : 'B'}</span>
-              {swapCandidates.map((candidate) => (
-                <button key={candidate.id} className="rounded-lg border border-amber-300/60 bg-slate-950/75 px-3 py-1.5 text-xs font-bold text-amber-100 hover:bg-slate-800" onClick={() => onlineSession.requestTeamSwap(candidate.id)} aria-label={`Request team switch with ${candidate.name}`}>
-                  Switch with {candidate.name}
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
 
       {/* Top player pods */}
       <div className="w-full max-w-[450px] mx-auto flex items-center justify-between px-2">

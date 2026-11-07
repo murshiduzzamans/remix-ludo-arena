@@ -198,6 +198,12 @@ describe('BoardGameScreen single-move behavior', () => {
     const move = before.legalMoves[0];
     const applied = applyMove(before, { actorColor: 'red', tokenIndex: move.tokenIndex, tokenColor: 'red' });
     if (!applied.ok) throw new Error(applied.error);
+    const nextState: GameState = {
+      ...applied.state,
+      players: applied.state.players.map((player) => player.color === 'red'
+        ? { ...player, tokens: player.tokens.map((token) => token.index === 0 ? { ...token, stepCount: 14 } : token) }
+        : player),
+    };
     const session = createOnlineSession(before, localColor);
     render(<BoardGameScreen initialMode="classic_4p" onlineSession={session as unknown as OnlineRoomConnection} onExit={vi.fn()} />);
 
@@ -205,8 +211,16 @@ describe('BoardGameScreen single-move behavior', () => {
     expect(screen.getByTestId('board')).toHaveAttribute('data-step', '10');
     act(() => vi.advanceTimersByTime(220));
     expect(screen.getByTestId('board')).toHaveAttribute('data-step', '11');
+    act(() => session.emitGame(applied.state));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '11');
+    act(() => session.emitMove(nextState, { id: 'move-2', color: 'red', tokenIndex: 0, fromStep: 13, toStep: 14 }));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '11');
     act(() => vi.advanceTimersByTime(660));
     expect(screen.getByTestId('board')).toHaveAttribute('data-step', '13');
-    expect(applied.state.players.find(p => p.color === 'red')?.tokens[0].stepCount).toBe(13);
+    act(() => vi.advanceTimersByTime(120));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '13');
+    act(() => vi.advanceTimersByTime(220));
+    expect(screen.getByTestId('board')).toHaveAttribute('data-step', '14');
+    expect(nextState.players.find(p => p.color === 'red')?.tokens[0].stepCount).toBe(14);
   });
 });

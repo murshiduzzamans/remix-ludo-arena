@@ -267,7 +267,47 @@ describe('online private rooms', () => {
     expect(sync.payload.state.currentTurnColor).toBe('red');
   });
 
-  it('requires the invited opposite-team player to accept a live 2v2 team switch and supports decline', async () => {
+  it('broadcasts movement metadata for bot moves to every connected client', async () => {
+    const namespace = new MemoryNamespace();
+    const env = { LUDO_ROOMS: namespace as never };
+    const created = await worker.fetch(new Request('https://game.test/api/rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'team_2v2', playerName: 'Host', rules }),
+    }), env);
+    const host = await created.json() as { roomCode: string; participantId: string };
+    const entry = namespace.rooms.get(host.roomCode)!;
+    const stored = entry.state.storage.values.get('room') as {
+      isMatchInProgress: boolean;
+      gameState: ReturnType<typeof createInitialGameState> | null;
+      turnDeadline: number | null;
+    };
+    const game = createInitialGameState({ id: 'bot-move-test', seed: 'bot-move-test', mode: 'team_2v2', customRules: rules });
+    const green = game.players.find((player) => player.color === 'green')!;
+    green.tokens[0] = { ...green.tokens[0], stepCount: 0, isInYard: false };
+    game.currentTurnColor = 'green';
+    const rolled = rollDice(game, 1);
+    if (!rolled.ok) throw new Error(rolled.error);
+    stored.isMatchInProgress = true;
+    stored.gameState = rolled.state;
+    stored.turnDeadline = Date.now() - 1;
+    entry.state.storage.values.set('room', stored);
+    entry.room = new LudoRoom(entry.state as never, { LUDO_ROOMS: namespace as never });
+    const hostSocket = new FakeSocket();
+    const observerSocket = new FakeSocket();
+    hostSocket.serializeAttachment({ participantId: host.participantId });
+    observerSocket.serializeAttachment({ participantId: 'observer' });
+    entry.state.acceptWebSocket(hostSocket);
+    entry.state.acceptWebSocket(observerSocket);
+
+    await entry.room.alarm();
+
+    for (const socket of [hostSocket, observerSocket]) {
+      const sync = socket.sent.map((item) => JSON.parse(item)).find((message) => message.type === 'SERVER_GAME_STATE_SYNC');
+      expect(sync?.payload.move).toMatchObject({ color: 'green', tokenIndex: 0, fromStep: 0, toStep: 1 });
+    }
+  });
+
+  it('requires the invited opposite-team player to accept a lobby team switch and supports decline', async () => {
     const namespace = new MemoryNamespace();
     const env = { LUDO_ROOMS: namespace as never };
     const created = await worker.fetch(new Request('https://game.test/api/rooms', {
@@ -283,18 +323,13 @@ describe('online private rooms', () => {
     const entry = namespace.rooms.get(host.roomCode)!;
     const stored = entry.state.storage.values.get('room') as {
       mode: 'team_2v2'; isMatchInProgress: boolean;
-      participants: Array<{ id: string; color: 'red' | 'green' | 'yellow' | 'blue'; isConnected: boolean; teamId?: string }>;
+      participants: Array<{ id: string; color: 'red' | 'green' | 'yellow' | 'blue'; isConnected: boolean; isReady: boolean; teamId?: string }>;
       gameState: ReturnType<typeof createInitialGameState> | null;
     };
-    stored.isMatchInProgress = true;
-    stored.participants = stored.participants.map((player) => ({ ...player, isConnected: true }));
-    const game = createInitialGameState({ id: 'team-swap-test', seed: 'team-swap', mode: 'team_2v2', customRules: rules });
-    game.players = game.players.map((player) => {
-      const participant = stored.participants.find((candidate) => candidate.color === player.color);
-      return { ...player, ...(participant ? { id: participant.id, name: participant.id === host.participantId ? 'Host' : 'Friend' } : {}), teamId: player.color === 'red' || player.color === 'yellow' ? 'team_A' : 'team_B' };
-    });
+    stored.isMatchInProgress = false;
+    stored.gameState = null;
+    stored.participants = stored.participants.map((player) => ({ ...player, isConnected: true, isReady: true }));
     stored.participants.forEach((participant) => { participant.teamId = participant.color === 'red' || participant.color === 'yellow' ? 'team_A' : 'team_B'; });
-    stored.gameState = game;
     entry.state.storage.values.set('room', stored);
     entry.room = new LudoRoom(entry.state as never, { LUDO_ROOMS: namespace as never });
     const hostSocket = new FakeSocket();
@@ -308,14 +343,26 @@ describe('online private rooms', () => {
       type: 'CLIENT_REQUEST_TEAM_SWAP', payload: { targetParticipantId: friend.participantId },
     }));
     await request();
-    let waiting = entry.state.storage.values.get('room') as typeof stored & { teamSwapRequest: { id: string; requesterId: string; targetId: string } };
+    let waiting = entry.state.storage.values.get('room') as typeof stored & { teamSwapRequest: { id: string; requesterId: string; targetId: string; expiresAt: number } };
     expect(waiting.teamSwapRequest).toMatchObject({ requesterId: host.participantId, targetId: friend.participantId });
+    await entry.room.webSocketMessage(hostSocket as never, JSON.stringify({ type: 'CLIENT_START_MATCH' }));
+    expect(hostSocket.sent.map((item) => JSON.parse(item)).at(-1)).toMatchObject({
+      type: 'SERVER_ERROR', payload: { code: 'TEAM_SWAP_PENDING' },
+    });
     await entry.room.webSocketMessage(friendSocket as never, JSON.stringify({
       type: 'CLIENT_RESPOND_TEAM_SWAP', payload: { requestId: waiting.teamSwapRequest.id, accept: false },
     }));
     waiting = entry.state.storage.values.get('room') as typeof waiting;
     expect(waiting.teamSwapRequest).toBeNull();
     expect(waiting.participants.find((player) => player.id === host.participantId)?.teamId).toBe('team_A');
+
+    await request();
+    waiting = entry.state.storage.values.get('room') as typeof waiting;
+    waiting.teamSwapRequest.expiresAt = Date.now() - 1;
+    entry.state.storage.values.set('room', waiting);
+    entry.room = new LudoRoom(entry.state as never, { LUDO_ROOMS: namespace as never });
+    await entry.room.alarm();
+    expect((entry.state.storage.values.get('room') as typeof waiting).teamSwapRequest).toBeNull();
 
     await request();
     waiting = entry.state.storage.values.get('room') as typeof waiting;
@@ -327,13 +374,16 @@ describe('online private rooms', () => {
     expect(updated.teamSwapRequest).toBeNull();
     expect(updated.participants.find((player) => player.id === host.participantId)?.teamId).toBe('team_B');
     expect(updated.participants.find((player) => player.id === friend.participantId)?.teamId).toBe('team_A');
-    expect(updated.gameState?.players.find((player) => player.id === host.participantId)?.teamId).toBe('team_B');
-    expect(updated.gameState?.players.find((player) => player.id === friend.participantId)?.teamId).toBe('team_A');
     for (const socket of [hostSocket, friendSocket]) {
       const messages = socket.sent.map((item) => JSON.parse(item));
       expect(messages.some((message) => message.type === 'SERVER_ROOM_STATE' && message.payload.teamSwapRequest === null)).toBe(true);
-      expect(messages.some((message) => message.type === 'SERVER_GAME_STATE_SYNC' && message.payload.state.players.some((player: { id: string; teamId: string }) => player.id === host.participantId && player.teamId === 'team_B'))).toBe(true);
+      expect(messages.some((message) => message.type === 'SERVER_GAME_STATE_SYNC')).toBe(false);
     }
+
+    await entry.room.webSocketMessage(hostSocket as never, JSON.stringify({ type: 'CLIENT_START_MATCH' }));
+    const started = entry.state.storage.values.get('room') as typeof waiting;
+    expect(started.gameState?.players.find((player) => player.color === 'red')?.teamId).toBe('team_B');
+    expect(started.gameState?.players.find((player) => player.color === 'green')?.teamId).toBe('team_A');
   });
 
   it('keeps dice rolls authoritative and starts only after every joined friend is ready', async () => {

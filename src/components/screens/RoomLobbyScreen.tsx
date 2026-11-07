@@ -8,10 +8,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { sound } from '../../audio/soundEffects';
 import { COLOR_ORDER, COLOR_TEAMS, COLOR_THEMES } from '../../engine/constants';
 import { DEFAULT_RULES } from '../../engine/gameEngine';
-import type { GameRules } from '../../engine/types';
+import type { GameRules, TeamId } from '../../engine/types';
 import { OnlineRoomConnection } from '../../network/onlineClient';
 import type { RoomEvent } from '../../network/onlineClient';
-import type { RoomSnapshot } from '../../network/protocol';
+import type { RoomParticipant, RoomSnapshot } from '../../network/protocol';
 
 interface RoomLobbyScreenProps {
   onStartOnlineMatch: (connection: OnlineRoomConnection) => void;
@@ -55,6 +55,31 @@ export const RoomLobbyScreen: React.FC<RoomLobbyScreenProps> = ({
       }
     });
   }, [connection, onStartOnlineMatch]);
+
+  useEffect(() => {
+    if (!initialRoomCode || connection || existingConnection) return;
+    let cancelled = false;
+    setBusy(true);
+    setError('');
+    void OnlineRoomConnection.reconnect(initialRoomCode, getSavedPlayerName())
+      .then((nextConnection) => {
+        if (cancelled) {
+          nextConnection?.close();
+          return;
+        }
+        if (!nextConnection) return;
+        setConnection(nextConnection);
+        setRoom(nextConnection.currentRoom);
+        setConnected(true);
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : 'Could not reconnect to your game.');
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => { cancelled = true; };
+  }, [connection, existingConnection, initialRoomCode]);
 
   useEffect(() => () => {
     if (!transferredToGame.current) connection?.close();
@@ -109,8 +134,23 @@ export const RoomLobbyScreen: React.FC<RoomLobbyScreenProps> = ({
   };
 
   const currentPlayer = room?.participants.find((participant) => participant.id === connection?.participantId);
+  const currentTeam = currentPlayer ? currentPlayer.teamId ?? COLOR_TEAMS[currentPlayer.color] : undefined;
+  const pendingTeamSwap = room?.teamSwapRequest ?? null;
+  const pendingSwapRequester = room?.participants.find((participant) => participant.id === pendingTeamSwap?.requesterId);
+  const isPendingSwapTarget = pendingTeamSwap?.targetId === currentPlayer?.id;
+  const swapCandidates = room?.participants.filter((participant) =>
+    participant.id !== currentPlayer?.id && !participant.isBot && participant.isConnected &&
+    (participant.teamId ?? COLOR_TEAMS[participant.color]) !== currentTeam
+  ) ?? [];
+  const getTeamRoster = (teamId: TeamId): Array<RoomParticipant | null> => {
+    if (!room) return [];
+    const members = room.participants
+      .filter((participant) => (participant.teamId ?? COLOR_TEAMS[participant.color]) === teamId)
+      .sort((a, b) => COLOR_ORDER.indexOf(a.color) - COLOR_ORDER.indexOf(b.color));
+    return [...members, ...Array.from({ length: Math.max(0, 2 - members.length) }, () => null)];
+  };
   const canStart = Boolean(
-    currentPlayer?.isHost && room && room.participants.length >= 2 && room.participants.every((participant) => participant.isReady) && connected
+    currentPlayer?.isHost && room && room.participants.length >= 2 && room.participants.every((participant) => participant.isReady) && connected && !room.teamSwapRequest
   );
 
   return (
@@ -129,6 +169,7 @@ export const RoomLobbyScreen: React.FC<RoomLobbyScreenProps> = ({
 
         {!room ? (
           <>
+            {busy && initialRoomCode && <div role="status" className="rounded-xl border border-sky-300/40 bg-[#063278] p-3 text-center text-xs font-semibold text-sky-100">Reconnecting to your game…</div>}
             {!OnlineRoomConnection.configured && (
               <div role="status" className="rounded-xl border border-amber-400/40 bg-amber-950/40 p-3 text-xs font-semibold text-amber-200">
                 Add the multiplayer Worker URL to <code>.env</code> to enable friend rooms. The server setup steps are in the README.
@@ -182,24 +223,22 @@ export const RoomLobbyScreen: React.FC<RoomLobbyScreenProps> = ({
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {room.mode === 'team_2v2' ? (['team_A', 'team_B'] as const).map((teamId) => {
-                  const teamColors = COLOR_ORDER.filter((color) => COLOR_TEAMS[color] === teamId);
                   const teamName = teamId === 'team_A' ? 'Team A' : 'Team B';
                   return (
                     <div key={teamId} className="col-span-2 rounded-xl border border-amber-300/40 bg-slate-950/20 p-2">
                       <div className="mb-2 flex items-center justify-between gap-2">
                         <span className="text-[11px] font-black uppercase tracking-wide text-amber-200">{teamName} · teammates</span>
-                        <span className="text-[10px] font-bold text-sky-100">{teamColors.map((color) => COLOR_THEMES[color].name).join(' + ')}</span>
+                        <span className="text-[10px] font-bold text-sky-100">{getTeamRoster(teamId).filter(Boolean).length}/2 seats</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        {teamColors.map((color) => {
-                          const participant = room.participants.find((player) => player.color === color);
-                          const theme = COLOR_THEMES[color];
+                        {getTeamRoster(teamId).map((participant, index) => {
+                          const theme = participant ? COLOR_THEMES[participant.color] : null;
                           return (
-                            <div key={color} className="flex min-h-[70px] items-center gap-2 rounded-xl border border-sky-300/30 bg-[#00245F] p-2">
-                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border-2 border-white text-sm font-black text-white" style={{ backgroundColor: theme.primary }}>{color.slice(0, 1).toUpperCase()}</span>
+                            <div key={participant?.id ?? `${teamId}-open-${index}`} className="flex min-h-[70px] items-center gap-2 rounded-xl border border-sky-300/30 bg-[#00245F] p-2">
+                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border-2 border-white text-sm font-black text-white" style={{ backgroundColor: theme?.primary ?? '#063278' }}>{participant ? participant.color.slice(0, 1).toUpperCase() : '+'}</span>
                               <span className="min-w-0">
                                 <span className="block truncate text-xs font-black">{participant?.name ?? 'Open seat'}</span>
-                                <span className="block text-[10px] font-bold text-sky-200">{theme.name} player · {participant ? (participant.id === room.hostId ? 'Host' : participant.isConnected ? 'Connected' : 'Reconnecting') : 'Server bot if left open'}</span>
+                                <span className="block text-[10px] font-bold text-sky-200">{participant ? `${theme?.name} seat · ${participant.id === room.hostId ? 'Host' : participant.isConnected ? 'Connected' : 'Reconnecting'}` : 'Server bot if left open'}</span>
                               </span>
                               {participant?.isReady && <Check className="ml-auto h-4 w-4 shrink-0 text-emerald-300" />}
                             </div>
@@ -223,7 +262,32 @@ export const RoomLobbyScreen: React.FC<RoomLobbyScreenProps> = ({
                   );
                 })}
               </div>
-              {room.mode === 'team_2v2' && <p className="text-center text-[10px] font-semibold text-sky-100">Seat colors stay assigned for the match. Red + Yellow play together; Green + Blue play together.</p>}
+              {room.mode === 'team_2v2' && (
+                <div className="space-y-2 rounded-xl border border-amber-300/30 bg-slate-950/20 p-2">
+                  <p className="text-center text-[10px] font-semibold text-sky-100">Team changes are available here before the match. Seat colors and turn order stay the same.</p>
+                  {isPendingSwapTarget && pendingTeamSwap && pendingSwapRequester ? (
+                    <div className="text-center" role="dialog" aria-label="Team switch request">
+                      <p className="text-xs font-bold">{pendingSwapRequester.name} wants to switch teams with you.</p>
+                      <div className="mt-2 flex justify-center gap-2">
+                        <button className="min-h-10 rounded-lg bg-emerald-600 px-4 text-xs font-bold" onClick={() => connection?.respondToTeamSwap(pendingTeamSwap.id, true)}>Accept</button>
+                        <button className="min-h-10 rounded-lg bg-slate-700 px-4 text-xs font-bold" onClick={() => connection?.respondToTeamSwap(pendingTeamSwap.id, false)}>Decline</button>
+                      </div>
+                    </div>
+                  ) : pendingTeamSwap && pendingTeamSwap.requesterId === currentPlayer?.id ? (
+                    <p className="text-center text-xs font-semibold text-sky-100" role="status">Waiting for {room.participants.find((participant) => participant.id === pendingTeamSwap.targetId)?.name ?? 'your friend'} to reply. The request expires automatically.</p>
+                  ) : pendingTeamSwap ? (
+                    <p className="text-center text-xs font-semibold text-sky-100" role="status">A team switch request is waiting for a reply.</p>
+                  ) : currentPlayer ? (
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {swapCandidates.length > 0 ? swapCandidates.map((candidate) => (
+                        <button key={candidate.id} disabled={!connected} className="min-h-10 rounded-lg border border-amber-300/60 bg-slate-950/75 px-3 text-xs font-bold text-amber-100 disabled:opacity-50" onClick={() => connection?.requestTeamSwap(candidate.id)} aria-label={`Request to switch teams with ${candidate.name}`}>
+                          Switch with {candidate.name}
+                        </button>
+                      )) : <span className="text-center text-xs text-sky-100">A connected player on the other team is needed to switch.</span>}
+                    </div>
+                  ) : null}
+                </div>
+              )}
               {!currentPlayer?.isHost && (
                 <button onClick={() => connection?.setReady(!currentPlayer?.isReady)} disabled={!connected} className="min-h-11 w-full rounded-xl border border-sky-200 bg-[#0052CC] text-xs font-black uppercase disabled:opacity-50">
                   {currentPlayer?.isReady ? 'I’m Ready ✓' : 'Tap when you’re ready'}

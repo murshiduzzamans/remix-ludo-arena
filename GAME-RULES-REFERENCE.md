@@ -69,8 +69,9 @@
 - Game continues for 2nd, 3rd, 4th place
 
 **Team Mode (2v2)**
-- Team A: Red + Yellow (opposite sides)
-- Team B: Green + Blue (opposite sides)
+- Default teams: Red + Yellow and Green + Blue
+- Before the match starts, players can request a team swap with a connected player on the opposing team in the room lobby; the other player must accept
+- A team swap changes team membership only; seat colors and clockwise turn order stay the same
 - Team wins when all 8 tokens (both teammates combined) reach finish
 - Both teammates get the win
 - Game tracks which teammate finished the final token
