@@ -7,6 +7,7 @@ import { ArrowLeft, RotateCw, Volume2, VolumeX } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import { sound } from '../../audio/soundEffects';
 import { chooseBotMove } from '../../engine/botEngine';
+import { createSeededRandom } from '../../engine/botRandom';
 import { applyMove, createDiceSource, createInitialGameState, getAutomaticMove, passTurn, rollDice } from '../../engine/gameEngine';
 import { getMoveDestination } from '../../engine/rules';
 import { getStepPath } from '../../engine/boardCoordinates';
@@ -412,7 +413,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
       botDecisionTimer = startTimer(() => {
         const s = stateRef.current;
         const turn = s.players.find((p) => p.color === s.currentTurnColor)!;
-        const chosen = chooseBotMove(s.legalMoves, turn, s.players, s.rules, s.isTeamMode, createDiceSource(`${s.seed}:${s.nextEventId}`));
+        const chosen = chooseBotMove(s.legalMoves, turn, s.players, s.rules, s.isTeamMode, createSeededRandom(`${s.seed}:${s.rngState}:${s.nextEventId}:${turn.color}`));
         if (chosen) playMove(chosen.tokenIndex, chosen.tokenColor);
       }, BOT_MOVE_DELAY_MS);
     }

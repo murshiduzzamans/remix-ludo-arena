@@ -1,4 +1,5 @@
 import { chooseBotMove } from '../src/engine/botEngine';
+import { createSeededRandom, getBotThinkingDelayMs } from '../src/engine/botRandom';
 import { COLOR_ORDER, COLOR_TEAMS } from '../src/engine/constants';
 import { advanceIfStuck, applyMove, createDiceSource, createInitialGameState, forfeitTimedOutTurn, getFairDiceRoll, rollDice } from '../src/engine/gameEngine';
 import { DEFAULT_RULES } from '../src/engine/gameEngine';
@@ -730,7 +731,7 @@ export class LudoRoom {
       if (!rolled.ok) return;
       room.gameState = rolled.state;
     } else {
-      const move = chooseBotMove(state.legalMoves, player, state.players, state.rules, state.isTeamMode, createDiceSource(`${state.seed}:${state.nextEventId}`));
+      const move = chooseBotMove(state.legalMoves, player, state.players, state.rules, state.isTeamMode, createSeededRandom(`${state.seed}:${state.rngState}:${state.nextEventId}:${player.color}`));
       if (move) {
         const applied = applyMove(state, { actorColor: player.color, tokenIndex: move.tokenIndex, tokenColor: move.tokenColor });
         if (applied.ok) {
@@ -761,7 +762,9 @@ export class LudoRoom {
     }
     let delayMs = TURN_TIMEOUT_MS;
     if (state.phase === 'moving' && state.legalMoves.length === 0) delayMs = 900;
-    else if (state.players.find((candidate) => candidate.color === state.currentTurnColor)?.isBot) delayMs = 700;
+    else if (state.players.find((candidate) => candidate.color === state.currentTurnColor)?.isBot) {
+      delayMs = getBotThinkingDelayMs(`${state.seed}:${state.rngState}:${state.nextEventId}:thinking`);
+    }
     if (resetDeadline || room.turnDeadline === null || room.turnDeadline === undefined) {
       room.turnDeadline = Date.now() + delayMs;
       await this.saveRoom();
