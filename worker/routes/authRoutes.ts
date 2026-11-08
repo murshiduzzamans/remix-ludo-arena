@@ -18,6 +18,7 @@ import {
   restoreAccountWithSyncCode,
   getProfile,
   updateProfile,
+  saveAvatar,
   deleteAccount,
   getPublic,
   getLeaderboard,
@@ -26,7 +27,7 @@ import { createOAuthState, buildAuthorizationUrl, exchangeCodeForTokens, verifyI
 import { buildGithubAuthUrl, exchangeGithubCodeForToken, fetchGithubUser } from '../auth/github';
 import { createSessionCookie, createOAuthStateCookie, clearCookie, getCookie } from '../auth/cookies';
 import { signData, verifySignature } from '../auth/crypto';
-import { validateDisplayName, validateAvatarId, isInAppBrowser, isOriginAllowed, hasRequiredHeader } from '../auth/validation';
+import { validateDisplayName, validateAvatarId, validateAvatarImage, isInAppBrowser, isOriginAllowed, hasRequiredHeader } from '../auth/validation';
 import { LEADERBOARD_CONFIG } from '../accounts/config';
 
 interface Env {
@@ -90,7 +91,7 @@ export async function handleGuestAuth(request: Request, env: Env): Promise<Respo
   const avatarId = validateAvatarId(body.avatarId) ?? 0;
 
   try {
-    const { user, sessionToken } = await createGuestSession(env.DB!, displayName, avatarId);
+    const { user, sessionToken } = await createGuestSession(env.DB!, displayName, avatarId, env.SESSION_SECRET!);
     const cookie = createSessionCookie(sessionToken);
 
     return new Response(JSON.stringify({
@@ -247,15 +248,15 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
     let currentUserId: string | undefined;
 
     if (sessionToken) {
-      const session = await validateSession(env.DB!, sessionToken);
+      const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
       currentUserId = session?.user.id;
     }
 
     // If no current session, create guest first
     if (!currentUserId) {
       const displayName = claims.name ?? claims.email?.split('@')[0] ?? 'Player';
-      const { user, sessionToken: guestToken } = await createGuestSession(env.DB!, displayName, 0);
-      await logout(env.DB!, guestToken);
+      const { user, sessionToken: guestToken } = await createGuestSession(env.DB!, displayName, 0, env.SESSION_SECRET!);
+      await logout(env.DB!, guestToken, env.SESSION_SECRET!);
       currentUserId = user.id;
     }
 
@@ -265,7 +266,8 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
       currentUserId,
       claims.sub,
       claims.name ?? 'Player',
-      claims.email
+      claims.email,
+      env.SESSION_SECRET!
     );
 
     const cookie = createSessionCookie(result.sessionToken);
@@ -317,7 +319,7 @@ export async function handleLogout(request: Request, env: Env): Promise<Response
   const sessionToken = getCookie(request, '__Host-session');
   if (sessionToken) {
     try {
-      await logout(env.DB!, sessionToken);
+      await logout(env.DB!, sessionToken, env.SESSION_SECRET!);
     } catch {
       // Ignore errors on logout
     }
@@ -350,7 +352,7 @@ export async function handleGetMe(request: Request, env: Env): Promise<Response>
   }
 
   try {
-    const session = await validateSession(env.DB!, sessionToken);
+    const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
     if (!session) {
       return json({ error: 'Session expired.' }, 401);
     }
@@ -365,6 +367,7 @@ export async function handleGetMe(request: Request, env: Env): Promise<Response>
         id: userWithStats.id,
         displayName: userWithStats.displayName,
         avatarId: userWithStats.avatarId,
+        avatarUrl: userWithStats.avatarUrl ?? null,
         isGuest: userWithStats.isGuest,
         level: userWithStats.stats.level,
         hasGithub: Boolean(userWithStats.githubId),
@@ -422,7 +425,7 @@ export async function handleUpdateMe(request: Request, env: Env): Promise<Respon
   }
 
   try {
-    const session = await validateSession(env.DB!, sessionToken);
+    const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
     if (!session) {
       return json({ error: 'Session expired.' }, 401);
     }
@@ -456,7 +459,7 @@ export async function handleDeleteMe(request: Request, env: Env): Promise<Respon
   }
 
   try {
-    const session = await validateSession(env.DB!, sessionToken);
+    const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
     if (!session) {
       return json({ error: 'Session expired.' }, 401);
     }
@@ -628,14 +631,14 @@ export async function handleGithubAuthCallback(request: Request, env: Env): Prom
     let currentUserId: string | undefined;
 
     if (sessionToken) {
-      const session = await validateSession(env.DB!, sessionToken);
+      const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
       currentUserId = session?.user.id;
     }
 
     // If no current session, create guest first
     if (!currentUserId) {
-      const { user: newGuest, sessionToken: guestToken } = await createGuestSession(env.DB!, displayName, 0);
-      await logout(env.DB!, guestToken);
+      const { user: newGuest, sessionToken: guestToken } = await createGuestSession(env.DB!, displayName, 0, env.SESSION_SECRET!);
+      await logout(env.DB!, guestToken, env.SESSION_SECRET!);
       currentUserId = newGuest.id;
     }
 
@@ -643,7 +646,8 @@ export async function handleGithubAuthCallback(request: Request, env: Env): Prom
       env.DB!,
       currentUserId,
       githubUser.id,
-      displayName
+      displayName,
+      env.SESSION_SECRET!
     );
 
     const cookie = createSessionCookie(result.sessionToken);
@@ -692,7 +696,7 @@ export async function handleGetSyncCode(request: Request, env: Env): Promise<Res
   }
 
   try {
-    const session = await validateSession(env.DB!, sessionToken);
+    const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
     if (!session) {
       return json({ error: 'Session expired.' }, 401);
     }
@@ -702,6 +706,55 @@ export async function handleGetSyncCode(request: Request, env: Env): Promise<Res
   } catch (error) {
     console.error('Get sync code error:', error);
     return json({ error: 'Failed to retrieve sync code.' }, 500);
+  }
+}
+
+/**
+ * POST /api/profile/avatar - Save the authenticated profile avatar
+ */
+export async function handleSaveAvatar(request: Request, env: Env): Promise<Response> {
+  if (!isAccountsEnabled(env)) {
+    return json({ error: 'Accounts are not enabled.' }, 503);
+  }
+
+  const requestOrigin = request.headers.get('Origin');
+  const allowedOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map(o => o.trim()).filter(Boolean);
+  if (requestOrigin && !isOriginAllowed(request, allowedOrigins)) {
+    return json({ error: 'Origin not allowed.' }, 403, null);
+  }
+
+  const sessionToken = getCookie(request, '__Host-session');
+  if (!sessionToken) {
+    return json({ error: 'Not authenticated.' }, 401);
+  }
+
+  let body: { avatarUrl?: unknown };
+  try {
+    body = await request.json() as { avatarUrl?: unknown };
+  } catch {
+    return json({ error: 'Invalid request body.' }, 400);
+  }
+
+  if (body.avatarUrl !== null && typeof body.avatarUrl !== 'string') {
+    return json({ error: 'Avatar URL must be a data URL or null.' }, 400);
+  }
+
+  const avatarUrl = body.avatarUrl === null ? null : validateAvatarImage(body.avatarUrl);
+  if (body.avatarUrl !== null && !avatarUrl) {
+    return json({ error: 'Invalid image format. Use JPG, PNG, WebP, or GIF data URL (max 2MB).' }, 400);
+  }
+
+  try {
+    const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
+    if (!session) {
+      return json({ error: 'Session expired.' }, 401);
+    }
+
+    await saveAvatar(env.DB!, session.user.id, avatarUrl);
+    return json({ success: true, avatarUrl });
+  } catch (error) {
+    console.error('Save avatar error:', error);
+    return json({ error: 'Failed to save avatar.' }, 500);
   }
 }
 
@@ -732,7 +785,7 @@ export async function handleRestoreWithSyncCode(request: Request, env: Env): Pro
   }
 
   try {
-    const restored = await restoreAccountWithSyncCode(env.DB!, body.syncCode);
+    const restored = await restoreAccountWithSyncCode(env.DB!, body.syncCode, env.SESSION_SECRET!);
     if (!restored) {
       return json({ error: 'Sync code not found. Check the code and try again.' }, 404);
     }
@@ -748,6 +801,7 @@ export async function handleRestoreWithSyncCode(request: Request, env: Env): Pro
         id: profile.id,
         displayName: profile.displayName,
         avatarId: profile.avatarId,
+        avatarUrl: profile.avatarUrl ?? null,
         isGuest: profile.isGuest,
         level: profile.stats.level,
       },

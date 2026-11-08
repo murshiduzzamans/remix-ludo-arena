@@ -7,8 +7,9 @@ import {
   ArrowLeft,
   Check,
   Pencil,
+  Camera,
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { sound } from '../../audio/soundEffects';
 import {
   loadMatchHistory,
@@ -17,6 +18,7 @@ import {
   saveProfile,
   UserProfile,
 } from '../../storage/profileStore';
+import { AvatarUploader } from '../accounts/AvatarUploader';
 
 interface ProfileScreenProps {
   onBack: () => void;
@@ -27,8 +29,31 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
   const [history] = useState<MatchRecord[]>(loadMatchHistory);
   const [isEditing, setIsEditing] = useState(false);
   const [nameInput, setNameInput] = useState(profile.name);
+  const [showAvatarUploader, setShowAvatarUploader] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState('👩');
+  const [avatarError, setAvatarError] = useState<string | null>(null);
   const avatarOptions = ['👩', '👦', '🦁', '🏎️', '👑', '🦊', '🐯', '🥷'];
+
+  useEffect(() => {
+    const refreshServerProfile = async () => {
+      try {
+        const response = await fetch('/api/me', { credentials: 'include' });
+        if (!response.ok) return;
+        const data = (await response.json()) as { user?: { avatarUrl?: string | null } };
+        if (data.user?.avatarUrl) {
+          setProfile((current) => {
+            if (data.user?.avatarUrl === current.avatarUrl) return current;
+            const updated = { ...current, avatarUrl: data.user?.avatarUrl ?? null };
+            saveProfile(updated);
+            return updated;
+          });
+        }
+      } catch {
+        // Local profile remains the offline source of truth.
+      }
+    };
+    void refreshServerProfile();
+  }, []);
 
   const handleSaveName = () => {
     sound.triggerHaptic(15);
@@ -44,6 +69,33 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
     sound.triggerHaptic(20);
     sound.playMove();
     setSelectedAvatar(av);
+  };
+
+  const handleAvatarUpload = async (base64Image: string) => {
+    setAvatarError(null);
+    let savedOnline = false;
+    try {
+      const response = await fetch('/api/profile/avatar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ avatarUrl: base64Image }),
+      });
+      savedOnline = response.ok;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
+        setAvatarError(errorData.error || 'Avatar sync failed. The local copy was saved.');
+      }
+    } catch {
+      setAvatarError('Avatar sync failed. The local copy was saved.');
+    }
+
+    const updated = { ...profile, avatarUrl: base64Image };
+    setProfile(updated);
+    saveProfile(updated);
+    sound.triggerHaptic(20);
+    sound.playMove();
+    return savedOnline;
   };
 
   const winRate =
@@ -97,9 +149,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
             {/* Framed Avatar */}
             <div className="relative">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-b from-amber-200 to-amber-500 p-0.5 shadow-md">
-                <div className="w-full h-full rounded-xl bg-[#0F2F7D] flex items-center justify-center text-3xl">
-                  {selectedAvatar}
-                </div>
+                {profile.avatarUrl ? (
+                  <img
+                    src={profile.avatarUrl}
+                    alt={`${profile.name}'s profile`}
+                    className="w-full h-full rounded-xl object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full rounded-xl bg-[#0F2F7D] flex items-center justify-center text-3xl">
+                    {selectedAvatar}
+                  </div>
+                )}
               </div>
               <span className="absolute -bottom-1 -right-1 px-1.5 py-0.2 rounded bg-[#FFD200] text-[#072468] font-black text-[9px] shadow">
                 Lvl {profile.level}
@@ -158,26 +218,78 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
             </div>
           </div>
 
-          {/* Quick Avatar Picker Strip */}
-          <div className="pt-2 border-t border-sky-400/30">
-            <span className="text-[10px] font-black text-sky-200 uppercase block mb-1.5">
-              Change Avatar Icon
-            </span>
-            <div className="grid grid-cols-8 gap-1">
-              {avatarOptions.map((av) => (
-                <button
-                  key={av}
-                  onClick={() => handleSelectAvatar(av)}
-                  className={`min-h-[36px] rounded-lg flex items-center justify-center text-lg transition-all cursor-pointer ${
-                    selectedAvatar === av
-                      ? 'bg-[#FFD200] border-2 border-white scale-110 shadow'
-                      : 'bg-[#003080] border border-sky-400/30 hover:brightness-125'
-                  }`}
-                >
-                  {av}
-                </button>
-              ))}
+          {/* Avatar Customization */}
+          <div className="pt-2 border-t border-sky-400/30 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black text-sky-200 uppercase">
+                Avatar
+              </span>
+              <button
+                onClick={() => setShowAvatarUploader(true)}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#FFD200] text-[#072468] text-[10px] font-black hover:brightness-110 active:scale-95 transition-transform cursor-pointer"
+              >
+                <Camera className="w-3 h-3" />
+                <span>Upload Picture</span>
+              </button>
             </div>
+
+            {/* Quick Avatar Picker Strip */}
+            <div>
+              <span className="text-[10px] text-sky-300 block mb-1.5">
+                Or choose emoji:
+              </span>
+              <div className="grid grid-cols-8 gap-1">
+                {avatarOptions.map((av) => (
+                  <button
+                    key={av}
+                    onClick={() => handleSelectAvatar(av)}
+                    className={`min-h-[36px] rounded-lg flex items-center justify-center text-lg transition-all cursor-pointer ${
+                      selectedAvatar === av
+                        ? 'bg-[#FFD200] border-2 border-white scale-110 shadow'
+                        : 'bg-[#003080] border border-sky-400/30 hover:brightness-125'
+                    }`}
+                  >
+                    {av}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {profile.avatarUrl && (
+              <div className="flex items-center gap-2 bg-[#003080] rounded-lg p-2 border border-sky-400/30">
+                <span className="text-[10px] text-sky-300 flex-1">Custom picture uploaded</span>
+                <button
+                  onClick={async () => {
+                    try {
+                      const response = await fetch('/api/profile/avatar', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ avatarUrl: null }),
+                      });
+                      if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({ error: 'Failed to remove avatar online.' }));
+                        setAvatarError(errorData.error);
+                        return;
+                      }
+                    } catch {
+                      setAvatarError('Avatar remove failed online. The local copy was kept.');
+                      return;
+                    }
+                    const updated = { ...profile, avatarUrl: null };
+                    setProfile(updated);
+                    saveProfile(updated);
+                    sound.triggerHaptic(10);
+                  }}
+                  className="text-[10px] text-red-300 hover:text-red-200 font-bold px-2 py-1 rounded bg-red-500/20 transition-colors cursor-pointer"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+            {avatarError && (
+              <p className="text-[10px] text-red-300 bg-red-500/10 border border-red-400/30 rounded-lg px-2 py-1.5" role="alert">{avatarError}</p>
+            )}
           </div>
         </div>
 
@@ -300,6 +412,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
             <span>BACK TO ARENA</span>
           </button>
         </div>
+
+        {showAvatarUploader && (
+          <AvatarUploader
+            currentAvatarUrl={profile.avatarUrl}
+            onUpload={handleAvatarUpload}
+            onClose={() => setShowAvatarUploader(false)}
+          />
+        )}
       </div>
     </div>
   );

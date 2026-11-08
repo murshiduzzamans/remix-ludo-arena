@@ -51,6 +51,20 @@ export function validateAvatarId(value: unknown): number | null {
 }
 
 /**
+ * Validates a profile avatar data URL.
+ * Avatars are small cropped square images; accepting only common image data URLs
+ * and a strict size bound keeps the profile payload predictable.
+ */
+export function validateAvatarImage(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const pattern = /^data:image\/(jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+\/=]+$/;
+  if (!pattern.test(value)) return null;
+  // The cropped 256x256 avatar is small; allow enough room for PNG while
+  // still rejecting the old large-file path.
+  return value.length < 3_000_000 ? value : null;
+}
+
+/**
  * Validates an email address format (basic check)
  */
 export function validateEmail(value: unknown): string | null {

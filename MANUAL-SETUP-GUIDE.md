@@ -253,13 +253,15 @@ npm run db:migrate:staging
 Expected output:
 ```
 🚀 Running D1 migrations for STAGING environment...
-📦 Found 6 migration files
+📦 Found 8 migration files
 ⚙️  Applying: 0001_create_users_table.sql
 ✅ Success: 0001_create_users_table.sql
 ⚙️  Applying: 0002_create_sessions_table.sql
 ✅ Success: 0002_create_sessions_table.sql
 ...
 ⚙️  Applying: 0006_add_github_and_sync_code.sql
+⚙️  Applying: 0007_add_profile_avatar.sql
+⚙️  Applying: 0008_add_match_progress_tracking.sql
 🎉 All migrations completed successfully!
 ```
 
@@ -278,7 +280,8 @@ matches
 match_players
 ```
 
-The final migration adds the GitHub identity and unique sync-code columns to `users`.
+The final migrations add the GitHub identity, sync-code columns, persisted profile
+avatar, and match publication/progress-sync tracking columns.
 
 ### 4.3 Migrate Production Database
 
@@ -479,10 +482,12 @@ Visit your production URL. You should now see:
 - **Account indicator** in top-right corner
 - **Account profile** and sign-in controls
 - **Sign in with GitHub/Google** and sync-code recovery controls
+- **Persistent profile avatar** and uploaded picture preview
+- **Online game progress** recorded once per published room result and reflected in
+  the account statistics/leaderboard
 
-The database has statistics and leaderboard tables, but completed online games are not
-currently connected to the stats writer. Game results will not yet appear in cloud
-statistics or the leaderboard.
+Only online rooms that publish a finished game are recorded. Local offline modes
+still use browser storage.
 
 ---
 
@@ -561,6 +566,8 @@ npx wrangler secret put SECRET_NAME --env staging
 - [ ] OAuth callback URL updated
 - [ ] `ACCOUNTS_ENABLED=true` set in wrangler.toml
 - [ ] Account features visible in production app
+- [ ] Avatar persisted and restored in account UI
+- [ ] One completed online game recorded in cloud statistics/leaderboard
 
 ---
 

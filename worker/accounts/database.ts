@@ -15,6 +15,14 @@ import { calculateLevel } from './config';
 import { generateSyncCode } from '../auth/syncCode';
 
 /**
+ * D1 exposes `batch` for atomic statements. It returns results in order, so
+ * callers use batch for multi-statement atomic updates.
+ */
+async function sessionHash(token: string, secret: string | undefined): Promise<string> {
+  return hashToken(token, secret);
+}
+
+/**
  * Creates a new guest user
  */
 export async function createGuestUser(
@@ -33,22 +41,21 @@ export async function createGuestUser(
     googleSub: null,
     githubId: null,
     syncCode,
+    avatarUrl: null,
     lastSeenAt: now,
     deletedAt: null,
   };
 
-  // Use batch to create user and initialize stats atomically
   const results = await db.batch([
     db.prepare(
-      `INSERT INTO users (id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at)
-       VALUES (?, ?, ?, ?, 1, NULL, NULL, ?, ?, NULL)`
+      `INSERT INTO users (id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, avatar_url, last_seen_at, deleted_at)
+       VALUES (?, ?, ?, ?, 1, NULL, NULL, ?, NULL, ?, NULL)`
     ).bind(user.id, user.createdAt, user.displayName, user.avatarId, user.syncCode, user.lastSeenAt),
     db.prepare(
       `INSERT INTO player_stats (user_id, games_played, wins, losses, abandons, captures, tokens_finished, xp, level, practice_games, updated_at)
        VALUES (?, 0, 0, 0, 0, 0, 0, 0, 1, 0, ?)`
     ).bind(user.id, now),
   ]);
-
   if (!results[0].success || !results[1].success) {
     throw new Error('Failed to create guest user');
   }
@@ -56,50 +63,14 @@ export async function createGuestUser(
   return user;
 }
 
-/**
- * Creates a new session for a user
- */
-export async function createSession(
-  db: D1Database,
-  userId: string,
-  sessionToken: string,
-  durationMs: number
-): Promise<Session> {
-  const now = Date.now();
-  const idHash = await hashToken(sessionToken);
-
-  const session: Session = {
-    idHash,
-    userId,
-    createdAt: now,
-    expiresAt: now + durationMs,
-    lastSeenAt: now,
-  };
-
-  await db.prepare(
-    `INSERT INTO sessions (id_hash, user_id, created_at, expires_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).bind(session.idHash, session.userId, session.createdAt, session.expiresAt, session.lastSeenAt).run();
-
-  return session;
-}
-
-/**
- * Finds a session by token and updates last seen
- */
-export async function findAndRefreshSession(
-  db: D1Database,
-  sessionToken: string,
-  slidingWindowMs: number
-): Promise<{ session: Session; user: User } | null> {
-  const idHash = await hashToken(sessionToken);
+async function mapSession(db: D1Database, sessionToken: string, sessionSecret?: string): Promise<{ session: Session; user: User } | null> {
+  const idHash = await sessionHash(sessionToken, sessionSecret);
   const now = Date.now();
 
-  // Find session and user
   const result = await db.prepare(
     `SELECT
       s.id_hash, s.user_id, s.created_at, s.expires_at, s.last_seen_at,
-      u.id, u.created_at as user_created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.github_id, u.sync_code, u.last_seen_at as user_last_seen_at, u.deleted_at
+      u.id, u.created_at as user_created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.github_id, u.sync_code, u.avatar_url, u.last_seen_at as user_last_seen_at, u.deleted_at
      FROM sessions s
      JOIN users u ON s.user_id = u.id
      WHERE s.id_hash = ? AND s.expires_at > ? AND u.deleted_at IS NULL`
@@ -124,28 +95,73 @@ export async function findAndRefreshSession(
     googleSub: (result.google_sub as string | null) ?? null,
     githubId: (result.github_id as string | null) ?? null,
     syncCode: (result.sync_code as string | null) ?? null,
+    avatarUrl: (result.avatar_url as string | null) ?? null,
     lastSeenAt: result.user_last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };
-
-  // Update last seen if older than sliding window
-  if (now - session.lastSeenAt > slidingWindowMs) {
-    await db.batch([
-      db.prepare(`UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?`).bind(now, idHash),
-      db.prepare(`UPDATE users SET last_seen_at = ? WHERE id = ?`).bind(now, user.id),
-    ]);
-    session.lastSeenAt = now;
-    user.lastSeenAt = now;
-  }
 
   return { session, user };
 }
 
 /**
+ * Creates a new session for a user
+ */
+export async function createSession(
+  db: D1Database,
+  userId: string,
+  sessionToken: string,
+  durationMs: number,
+  sessionSecret?: string
+): Promise<Session> {
+  const now = Date.now();
+  const idHash = await sessionHash(sessionToken, sessionSecret);
+
+  const session: Session = {
+    idHash,
+    userId,
+    createdAt: now,
+    expiresAt: now + durationMs,
+    lastSeenAt: now,
+  };
+
+  await db.prepare(
+    `INSERT INTO sessions (id_hash, user_id, created_at, expires_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(session.idHash, session.userId, session.createdAt, session.expiresAt, session.lastSeenAt).run();
+
+  return session;
+}
+
+/**
+ * Finds a session by token and updates last seen
+ */
+export async function findAndRefreshSession(
+  db: D1Database,
+  sessionToken: string,
+  slidingWindowMs: number,
+  sessionSecret?: string
+): Promise<{ session: Session; user: User } | null> {
+  const found = await mapSession(db, sessionToken, sessionSecret);
+  if (!found) return null;
+
+  const { session, user } = found;
+  const now = Date.now();
+  if (now - session.lastSeenAt > slidingWindowMs) {
+    await db.batch([
+      db.prepare(`UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?`).bind(now, session.idHash),
+      db.prepare(`UPDATE users SET last_seen_at = ? WHERE id = ?`).bind(now, user.id),
+    ]);
+    session.lastSeenAt = now;
+    user.lastSeenAt = now;
+  }
+  return found;
+}
+
+/**
  * Deletes a session
  */
-export async function deleteSession(db: D1Database, sessionToken: string): Promise<void> {
-  const idHash = await hashToken(sessionToken);
+export async function deleteSession(db: D1Database, sessionToken: string, sessionSecret?: string): Promise<void> {
+  const idHash = await sessionHash(sessionToken, sessionSecret);
   await db.prepare(`DELETE FROM sessions WHERE id_hash = ?`).bind(idHash).run();
 }
 
@@ -154,7 +170,7 @@ export async function deleteSession(db: D1Database, sessionToken: string): Promi
  */
 export async function findUserByGoogleSub(db: D1Database, googleSub: string): Promise<User | null> {
   const result = await db.prepare(
-    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at
+    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, avatar_url, last_seen_at, deleted_at
      FROM users
      WHERE google_sub = ? AND deleted_at IS NULL`
   ).bind(googleSub).first();
@@ -170,6 +186,7 @@ export async function findUserByGoogleSub(db: D1Database, googleSub: string): Pr
     googleSub: (result.google_sub as string | null) ?? null,
     githubId: (result.github_id as string | null) ?? null,
     syncCode: (result.sync_code as string | null) ?? null,
+    avatarUrl: (result.avatar_url as string | null) ?? null,
     lastSeenAt: result.last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };
@@ -180,7 +197,7 @@ export async function findUserByGoogleSub(db: D1Database, googleSub: string): Pr
  */
 export async function findUserByGithubId(db: D1Database, githubId: string): Promise<User | null> {
   const result = await db.prepare(
-    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at
+    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, avatar_url, last_seen_at, deleted_at
      FROM users
      WHERE github_id = ? AND deleted_at IS NULL`
   ).bind(githubId).first();
@@ -196,6 +213,7 @@ export async function findUserByGithubId(db: D1Database, githubId: string): Prom
     googleSub: (result.google_sub as string | null) ?? null,
     githubId: (result.github_id as string | null) ?? null,
     syncCode: (result.sync_code as string | null) ?? null,
+    avatarUrl: (result.avatar_url as string | null) ?? null,
     lastSeenAt: result.last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };
@@ -222,7 +240,7 @@ export async function linkGithubAccount(
  */
 export async function findUserBySyncCode(db: D1Database, syncCode: string): Promise<User | null> {
   const result = await db.prepare(
-    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at
+    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, avatar_url, last_seen_at, deleted_at
      FROM users
      WHERE sync_code = ? AND deleted_at IS NULL`
   ).bind(syncCode).first();
@@ -238,6 +256,7 @@ export async function findUserBySyncCode(db: D1Database, syncCode: string): Prom
     googleSub: (result.google_sub as string | null) ?? null,
     githubId: (result.github_id as string | null) ?? null,
     syncCode: (result.sync_code as string | null) ?? null,
+    avatarUrl: (result.avatar_url as string | null) ?? null,
     lastSeenAt: result.last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };
@@ -295,7 +314,6 @@ export async function mergeGuestIntoAccount(
 ): Promise<void> {
   const now = Date.now();
 
-  // Get both users' stats
   const [targetStats, guestStats] = await Promise.all([
     db.prepare(`SELECT * FROM player_stats WHERE user_id = ?`).bind(targetUserId).first(),
     db.prepare(`SELECT * FROM player_stats WHERE user_id = ?`).bind(guestUserId).first(),
@@ -305,7 +323,6 @@ export async function mergeGuestIntoAccount(
     throw new Error('Stats not found for merge');
   }
 
-  // Sum all stats
   const mergedStats = {
     gamesPlayed: (targetStats.games_played as number) + (guestStats.games_played as number),
     wins: (targetStats.wins as number) + (guestStats.wins as number),
@@ -317,10 +334,9 @@ export async function mergeGuestIntoAccount(
     practiceGames: (targetStats.practice_games as number) + (guestStats.practice_games as number),
   };
 
-  mergedStats.xp = Math.max(mergedStats.xp, 0); // Ensure non-negative
+  mergedStats.xp = Math.max(mergedStats.xp, 0);
   const level = calculateLevel(mergedStats.xp);
 
-  // Update target user stats, reassign guest's matches, delete guest
   await db.batch([
     db.prepare(
       `UPDATE player_stats
@@ -331,9 +347,7 @@ export async function mergeGuestIntoAccount(
       mergedStats.captures, mergedStats.tokensFinished, mergedStats.xp, level,
       mergedStats.practiceGames, now, targetUserId
     ),
-    // Reassign match_players records to target user
     db.prepare(`UPDATE match_players SET user_id = ? WHERE user_id = ?`).bind(targetUserId, guestUserId),
-    // Delete guest user and related data
     db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(guestUserId),
     db.prepare(`DELETE FROM player_stats WHERE user_id = ?`).bind(guestUserId),
     db.prepare(`DELETE FROM users WHERE id = ?`).bind(guestUserId),
@@ -346,7 +360,7 @@ export async function mergeGuestIntoAccount(
 export async function getUserWithStats(db: D1Database, userId: string): Promise<UserWithStats | null> {
   const result = await db.prepare(
     `SELECT
-      u.id, u.created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.github_id, u.sync_code, u.last_seen_at, u.deleted_at,
+      u.id, u.created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.github_id, u.sync_code, u.avatar_url, u.last_seen_at, u.deleted_at,
       s.games_played, s.wins, s.losses, s.abandons, s.captures, s.tokens_finished, s.xp, s.level, s.practice_games, s.updated_at
      FROM users u
      LEFT JOIN player_stats s ON u.id = s.user_id
@@ -364,6 +378,7 @@ export async function getUserWithStats(db: D1Database, userId: string): Promise<
     googleSub: (result.google_sub as string | null) ?? null,
     githubId: (result.github_id as string | null) ?? null,
     syncCode: (result.sync_code as string | null) ?? null,
+    avatarUrl: (result.avatar_url as string | null) ?? null,
     lastSeenAt: result.last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };
@@ -399,6 +414,16 @@ export async function updateUserProfile(
   ).bind(displayName, avatarId, userId).run();
 }
 
+export async function updateUserAvatar(
+  db: D1Database,
+  userId: string,
+  avatarUrl: string | null
+): Promise<void> {
+  await db.prepare(
+    `UPDATE users SET avatar_url = ? WHERE id = ?`
+  ).bind(avatarUrl, userId).run();
+}
+
 /**
  * Soft deletes a user account
  */
@@ -406,11 +431,8 @@ export async function deleteUserAccount(db: D1Database, userId: string): Promise
   const now = Date.now();
 
   await db.batch([
-    // Soft delete user
     db.prepare(`UPDATE users SET deleted_at = ?, display_name = 'Deleted User' WHERE id = ?`).bind(now, userId),
-    // Delete sessions
     db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId),
-    // Anonymize match_players (set user_id to NULL, keeping match history)
     db.prepare(`UPDATE match_players SET user_id = NULL WHERE user_id = ?`).bind(userId),
   ]);
 }
@@ -420,7 +442,7 @@ export async function deleteUserAccount(db: D1Database, userId: string): Promise
  */
 export async function getPublicProfile(db: D1Database, userId: string): Promise<PublicProfile | null> {
   const result = await db.prepare(
-    `SELECT u.id, u.display_name, u.avatar_id, s.level, s.games_played, s.wins
+    `SELECT u.id, u.display_name, u.avatar_id, u.avatar_url, s.level, s.games_played, s.wins
      FROM users u
      LEFT JOIN player_stats s ON u.id = s.user_id
      WHERE u.id = ? AND u.deleted_at IS NULL`
@@ -435,6 +457,7 @@ export async function getPublicProfile(db: D1Database, userId: string): Promise<
     id: result.id as string,
     displayName: result.display_name as string,
     avatarId: result.avatar_id as number,
+    avatarUrl: (result.avatar_url as string | null) ?? null,
     level: (result.level as number) ?? 1,
     stats: {
       gamesPlayed,
@@ -449,7 +472,7 @@ export async function getPublicProfile(db: D1Database, userId: string): Promise<
  */
 export async function getLeaderboard(db: D1Database, limit: number): Promise<LeaderboardEntry[]> {
   const results = await db.prepare(
-    `SELECT u.id, u.display_name, u.avatar_id, s.level, s.wins, s.games_played
+    `SELECT u.id, u.display_name, u.avatar_id, u.avatar_url, s.level, s.wins, s.games_played
      FROM player_stats s
      JOIN users u ON s.user_id = u.id
      WHERE u.deleted_at IS NULL AND s.games_played >= 5
@@ -466,6 +489,7 @@ export async function getLeaderboard(db: D1Database, limit: number): Promise<Lea
       userId: row.id as string,
       displayName: row.display_name as string,
       avatarId: row.avatar_id as number,
+      avatarUrl: (row.avatar_url as string | null) ?? null,
       level: row.level as number,
       wins,
       gamesPlayed,
@@ -484,20 +508,16 @@ export async function recordMatch(
 ): Promise<void> {
   const now = Date.now();
 
-  // Check if match already recorded (idempotency)
   const existing = await db.prepare(`SELECT id FROM matches WHERE id = ?`).bind(match.id).first();
-  if (existing) return; // Already recorded, skip
+  if (existing) return;
 
-  // Build batch operations
   const operations = [
-    // Insert match
     db.prepare(
-      `INSERT INTO matches (id, finished_at, mode, player_count, had_bots)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(match.id, match.finishedAt, match.mode, match.playerCount, match.hadBots ? 1 : 0),
+      `INSERT INTO matches (id, finished_at, mode, player_count, had_bots, published_at, owner_user_id, progress_synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(match.id, match.finishedAt, match.mode, match.playerCount, match.hadBots ? 1 : 0, now, match.ownerUserId ?? null, match.progressSyncedAt ?? null),
   ];
 
-  // Insert match_players
   for (const player of players) {
     operations.push(
       db.prepare(
@@ -515,8 +535,9 @@ export async function recordMatch(
       )
     );
 
-    // Update player stats if user exists
     if (player.userId) {
+      const stats = await db.prepare(`SELECT xp FROM player_stats WHERE user_id = ?`).bind(player.userId).first();
+      const newXp = ((stats?.xp as number) ?? 0) + player.xpGained;
       operations.push(
         db.prepare(
           `UPDATE player_stats
@@ -538,7 +559,7 @@ export async function recordMatch(
           player.captures,
           player.tokensFinished,
           player.xpGained,
-          calculateLevel((await db.prepare(`SELECT xp FROM player_stats WHERE user_id = ?`).bind(player.userId).first())?.xp as number ?? 0) + player.xpGained,
+          calculateLevel(newXp),
           match.hadBots ? 1 : 0,
           now,
           player.userId

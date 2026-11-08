@@ -22,6 +22,7 @@ export interface MatchRecord {
 export interface UserProfile {
   name: string;
   avatarSeed: string;
+  avatarUrl?: string | null;
   level: number;
   xp: number;
   totalMatches: number;
@@ -63,6 +64,7 @@ export type ValidationResult<T> =
 export const DEFAULT_PROFILE: UserProfile = {
   name: 'Arena Master',
   avatarSeed: 'master-1',
+  avatarUrl: null,
   level: 1,
   xp: 0,
   totalMatches: 0,
@@ -152,6 +154,9 @@ export function validateProfile(raw: unknown): ValidationResult<UserProfile> {
   if (typeof p.avatarSeed !== 'string') {
     errors.push('avatarSeed must be a string');
   }
+  if (p.avatarUrl !== undefined && p.avatarUrl !== null && typeof p.avatarUrl !== 'string') {
+    errors.push('avatarUrl must be a string or null');
+  }
   if (typeof p.level !== 'number' || !Number.isInteger(p.level) || p.level < 1) {
     errors.push('level must be a positive integer');
   }
@@ -191,6 +196,7 @@ export function validateProfile(raw: unknown): ValidationResult<UserProfile> {
     value: {
       name: p.name as string,
       avatarSeed: p.avatarSeed as string,
+      avatarUrl: (p.avatarUrl as string | null | undefined) ?? null,
       level: p.level as number,
       xp: p.xp as number,
       totalMatches: p.totalMatches as number,

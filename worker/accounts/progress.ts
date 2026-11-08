@@ -21,7 +21,8 @@ export async function recordFinishedGame(
   db: D1Database,
   matchId: string,
   gameState: GameState,
-  userIdByColor: Record<PlayerColor, string | undefined>
+  userIdByColor: Record<PlayerColor, string | undefined>,
+  ownerUserId?: string | null
 ): Promise<void> {
   if (gameState.phase !== 'game_over') {
     throw new Error('Cannot record unfinished game');
@@ -41,6 +42,9 @@ export async function recordFinishedGame(
     mode: gameState.mode,
     playerCount,
     hadBots,
+    publishedAt: now,
+    ownerUserId: ownerUserId ?? null,
+    progressSyncedAt: ownerUserId ? now : null,
   };
 
   const matchPlayers: MatchPlayer[] = [];
@@ -108,14 +112,15 @@ export async function safeRecordMatch(
   db: D1Database | undefined,
   matchId: string,
   gameState: GameState,
-  userIdByColor: Record<PlayerColor, string | undefined>
+  userIdByColor: Record<PlayerColor, string | undefined>,
+  ownerUserId?: string | null
 ): Promise<{ success: boolean; error?: string }> {
   if (!db) {
     return { success: false, error: 'Database not available' };
   }
 
   try {
-    await recordFinishedGame(db, matchId, gameState, userIdByColor);
+    await recordFinishedGame(db, matchId, gameState, userIdByColor, ownerUserId);
     return { success: true };
   } catch (error) {
     console.error('Failed to record match:', error);

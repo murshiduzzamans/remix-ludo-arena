@@ -21,9 +21,9 @@ export function generateToken(bytes = 32): string {
  * Hashes a token using SHA-256
  * Tokens are stored hashed in the database
  */
-export async function hashToken(token: string): Promise<string> {
+export async function hashToken(token: string, secret?: string): Promise<string> {
   const encoder = new TextEncoder();
-  const data = encoder.encode(token);
+  const data = encoder.encode(secret ? `${secret}.${token}` : token);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((byte) => byte.toString(16).padStart(2, '0')).join('');

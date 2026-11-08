@@ -23,6 +23,7 @@ import {
   mergeGuestIntoAccount,
   getUserWithStats,
   updateUserProfile,
+  updateUserAvatar,
   deleteUserAccount,
   getPublicProfile,
   getLeaderboard as dbGetLeaderboard,
@@ -37,11 +38,12 @@ import type { User, UserWithStats, PublicProfile, LeaderboardEntry } from './typ
 export async function createGuestSession(
   db: D1Database,
   displayName: string,
-  avatarId: number
+  avatarId: number,
+  sessionSecret?: string
 ): Promise<{ user: User; sessionToken: string }> {
   const user = await createGuestUser(db, displayName, avatarId);
   const sessionToken = generateToken(32);
-  await createSession(db, user.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+  await createSession(db, user.id, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
 
   return { user, sessionToken };
 }
@@ -51,17 +53,18 @@ export async function createGuestSession(
  */
 export async function validateSession(
   db: D1Database,
-  sessionToken: string
+  sessionToken: string,
+  sessionSecret?: string
 ): Promise<{ user: User } | null> {
-  const result = await findAndRefreshSession(db, sessionToken, SESSION_CONFIG.SLIDING_WINDOW_MS);
+  const result = await findAndRefreshSession(db, sessionToken, SESSION_CONFIG.SLIDING_WINDOW_MS, sessionSecret);
   return result ? { user: result.user } : null;
 }
 
 /**
  * Logs out a user by deleting their session
  */
-export async function logout(db: D1Database, sessionToken: string): Promise<void> {
-  await dbDeleteSession(db, sessionToken);
+export async function logout(db: D1Database, sessionToken: string, sessionSecret?: string): Promise<void> {
+  await dbDeleteSession(db, sessionToken, sessionSecret);
 }
 
 /**
@@ -73,7 +76,8 @@ export async function linkOrMergeGoogleAccount(
   currentUserId: string,
   googleSub: string,
   googleName: string,
-  googleEmail: string | undefined
+  googleEmail: string | undefined,
+  sessionSecret?: string
 ): Promise<{ merged: boolean; userId: string; sessionToken: string }> {
   const currentUser = await getUserWithStats(db, currentUserId);
   if (!currentUser) {
@@ -87,7 +91,7 @@ export async function linkOrMergeGoogleAccount(
     // New Google account - link it to current user
     await linkGoogleAccount(db, currentUserId, googleSub, googleName);
     const sessionToken = generateToken(32);
-    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS);
+    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
     return { merged: false, userId: currentUserId, sessionToken };
   }
 
@@ -95,7 +99,7 @@ export async function linkOrMergeGoogleAccount(
   if (existingGoogleUser.id === currentUserId) {
     // Same user, just create new session
     const sessionToken = generateToken(32);
-    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS);
+    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
     return { merged: false, userId: currentUserId, sessionToken };
   }
 
@@ -103,13 +107,13 @@ export async function linkOrMergeGoogleAccount(
   if (currentUser.isGuest && currentUser.stats.gamesPlayed > 0) {
     await mergeGuestIntoAccount(db, existingGoogleUser.id, currentUserId);
     const sessionToken = generateToken(32);
-    await createSession(db, existingGoogleUser.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+    await createSession(db, existingGoogleUser.id, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
     return { merged: true, userId: existingGoogleUser.id, sessionToken };
   }
 
   // Current user is not guest or has no progress - just switch to Google account
   const sessionToken = generateToken(32);
-  await createSession(db, existingGoogleUser.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+  await createSession(db, existingGoogleUser.id, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
   return { merged: false, userId: existingGoogleUser.id, sessionToken };
 }
 
@@ -121,7 +125,8 @@ export async function linkOrMergeGithubAccount(
   db: D1Database,
   currentUserId: string,
   githubId: string,
-  githubName: string
+  githubName: string,
+  sessionSecret?: string
 ): Promise<{ merged: boolean; userId: string; sessionToken: string }> {
   const currentUser = await getUserWithStats(db, currentUserId);
   if (!currentUser) {
@@ -135,14 +140,14 @@ export async function linkOrMergeGithubAccount(
     // New GitHub account - link it to current user
     await linkGithubAccount(db, currentUserId, githubId, githubName);
     const sessionToken = generateToken(32);
-    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS);
+    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
     return { merged: false, userId: currentUserId, sessionToken };
   }
 
   // GitHub account already exists
   if (existingGithubUser.id === currentUserId) {
     const sessionToken = generateToken(32);
-    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS);
+    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
     return { merged: false, userId: currentUserId, sessionToken };
   }
 
@@ -150,13 +155,13 @@ export async function linkOrMergeGithubAccount(
   if (currentUser.isGuest && currentUser.stats.gamesPlayed > 0) {
     await mergeGuestIntoAccount(db, existingGithubUser.id, currentUserId);
     const sessionToken = generateToken(32);
-    await createSession(db, existingGithubUser.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+    await createSession(db, existingGithubUser.id, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
     return { merged: true, userId: existingGithubUser.id, sessionToken };
   }
 
   // Current user is not guest or has no progress - just switch to GitHub account
   const sessionToken = generateToken(32);
-  await createSession(db, existingGithubUser.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+  await createSession(db, existingGithubUser.id, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
   return { merged: false, userId: existingGithubUser.id, sessionToken };
 }
 
@@ -172,7 +177,8 @@ export async function getUserSyncCode(db: D1Database, userId: string): Promise<s
  */
 export async function restoreAccountWithSyncCode(
   db: D1Database,
-  syncCodeInput: string
+  syncCodeInput: string,
+  sessionSecret?: string
 ): Promise<{ user: User; sessionToken: string } | null> {
   const normalized = normalizeSyncCode(syncCodeInput);
   if (!normalized) return null;
@@ -181,7 +187,7 @@ export async function restoreAccountWithSyncCode(
   if (!user) return null;
 
   const sessionToken = generateToken(32);
-  await createSession(db, user.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+  await createSession(db, user.id, sessionToken, SESSION_CONFIG.DURATION_MS, sessionSecret);
   return { user, sessionToken };
 }
 
@@ -202,6 +208,10 @@ export async function updateProfile(
   avatarId: number
 ): Promise<void> {
   await updateUserProfile(db, userId, displayName, avatarId);
+}
+
+export async function saveAvatar(db: D1Database, userId: string, avatarUrl: string | null): Promise<void> {
+  await updateUserAvatar(db, userId, avatarUrl);
 }
 
 /**

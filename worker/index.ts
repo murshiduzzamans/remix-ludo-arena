@@ -19,8 +19,12 @@ import {
   handleDeleteMe,
   handleGetPublicProfile,
   handleGetLeaderboard,
+  handleSaveAvatar,
 } from './routes/authRoutes';
 import type { D1Database } from '@cloudflare/workers-types';
+import { safeRecordMatch } from './accounts/progress';
+import { getCookie } from './auth/cookies';
+import { validateSession } from './accounts/service';
 
 export { VoiceBudget } from './voiceBudget';
 
@@ -406,6 +410,9 @@ export default {
     if (profileMatch && request.method === 'GET') {
       return handleGetPublicProfile(decodeURIComponent(profileMatch[1]), env);
     }
+    if (url.pathname === '/api/profile/avatar' && request.method === 'POST') {
+      return handleSaveAvatar(request, env);
+    }
 
     if (url.pathname === '/api/admin/voice-budget') {
       if (request.method !== 'GET') return json({ error: 'Not found.' }, 404, corsOrigin);
@@ -433,6 +440,7 @@ export default {
     if (!url.pathname.startsWith('/api/')) {
       return env.ASSETS ? env.ASSETS.fetch(request) : json({ error: 'Not found.' }, 404, corsOrigin);
     }
+
     if (url.pathname === '/api/rooms' && request.method === 'POST') {
       const limitStatus = await rateLimitStatus(env.CREATE_ROOM_LIMITER, request);
       if (limitStatus === 'limited') return json({ error: 'Too many rooms created. Please try again in a minute.' }, 429, corsOrigin);
@@ -485,7 +493,18 @@ export default {
     }
 
     if (roomRoute[2] === 'ws' && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
-      const upstream = await room.fetch(new Request('https://room.internal/ws', request));
+      const sessionToken = getCookie(request, '__Host-session');
+      let requestUserId: string | undefined;
+      if (sessionToken && env.DB && env.SESSION_SECRET) {
+        const session = await validateSession(env.DB, sessionToken, env.SESSION_SECRET);
+        requestUserId = session?.user.id;
+      }
+      const headers = new Headers(request.headers);
+      if (requestUserId) headers.set('x-ludo-user-id', requestUserId);
+      const upstream = await room.fetch(new Request('https://room.internal/ws', {
+        method: 'GET',
+        headers,
+      }));
       return upstream;
     }
 
@@ -1043,6 +1062,12 @@ export class LudoRoom {
     }
   }
 
+  private async recordCompletedGame(room: StoredRoom): Promise<void> {
+    const state = room.gameState;
+    if (!state || state.phase !== 'game_over') return;
+    await safeRecordMatch(this.env.DB, state.id, state, { red: room.participants.find((player) => player.color === 'red')?.userId, green: room.participants.find((player) => player.color === 'green')?.userId, yellow: room.participants.find((player) => player.color === 'yellow')?.userId, blue: room.participants.find((player) => player.color === 'blue')?.userId }, room.participants.find((player) => player.isHost)?.userId);
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -1099,7 +1124,7 @@ export class LudoRoom {
       const client = pair[0];
       const server = pair[1];
       this.ctx.acceptWebSocket(server);
-      server.serializeAttachment({ participantId: null });
+      server.serializeAttachment({ participantId: null, userId: request.headers.get('x-ludo-user-id') });
       return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
     }
 
@@ -1124,7 +1149,7 @@ export class LudoRoom {
       return;
     }
 
-    const attachment = socket.deserializeAttachment() as { participantId?: string | null } | null;
+    const attachment = socket.deserializeAttachment() as { participantId?: string | null; userId?: string | null } | null;
     if (!attachment?.participantId && message.type === 'CLIENT_AUTH') {
       const payload = message.payload as { token?: unknown } | undefined;
       const participant = typeof payload?.token === 'string'
@@ -1138,7 +1163,8 @@ export class LudoRoom {
       for (const previousSocket of this.socketsForParticipant(participant.id)) {
         if (previousSocket !== socket) previousSocket.close(4001, 'This player reconnected in another tab.');
       }
-      socket.serializeAttachment({ participantId: participant.id });
+      socket.serializeAttachment({ participantId: participant.id, userId: attachment?.userId ?? participant.userId });
+      participant.userId = attachment?.userId ?? participant.userId;
       participant.isConnected = true;
       await this.saveRoom();
       await this.scheduleBotIfNeeded(false);
@@ -1414,6 +1440,7 @@ export class LudoRoom {
       if (!rolled.ok) return this.send(socket, { type: 'SERVER_ERROR', payload: { code: rolled.error, message: 'The dice roll could not be applied.' } });
       room.gameState = rolled.state;
       await this.saveRoom();
+      if (room.gameState.phase === 'game_over') await this.recordCompletedGame(room);
       await this.scheduleBotIfNeeded();
       this.broadcastGame();
       return;
@@ -1429,6 +1456,7 @@ export class LudoRoom {
       if (!result.ok) return this.send(socket, { type: 'SERVER_ERROR', payload: { code: result.error, message: 'Choose one of the highlighted tokens.' } });
       room.gameState = result.state;
       await this.saveRoom();
+      if (room.gameState.phase === 'game_over') await this.recordCompletedGame(room);
       const moved = state.legalMoves.find((candidate) => candidate.tokenIndex === payload!.tokenIndex && candidate.tokenColor === (payload!.tokenColor ?? state.currentTurnColor));
       this.broadcastGame(moved ? {
         id: crypto.randomUUID(),
@@ -1498,10 +1526,18 @@ export class LudoRoom {
     if (state.phase === 'moving' && state.legalMoves.length === 0) {
       const advanced = advanceIfStuck(state);
       if (advanced.ok) room.gameState = advanced.state;
+      if (room.gameState?.phase === 'game_over') {
+        await this.saveRoom();
+        await this.recordCompletedGame(room);
+        await this.scheduleBotIfNeeded();
+        this.broadcastGame();
+        return;
+      }
     } else if (!player?.isBot) {
       const advanced = forfeitTimedOutTurn(state);
       if (advanced.ok) room.gameState = advanced.state;
       await this.saveRoom();
+      if (room.gameState?.phase === 'game_over') await this.recordCompletedGame(room);
       await this.scheduleBotIfNeeded();
       this.broadcastGame();
       this.broadcast({ type: 'SERVER_TURN_TIMEOUT', payload: { timedOutColor: state.currentTurnColor } });
@@ -1528,6 +1564,7 @@ export class LudoRoom {
       }
     }
     await this.saveRoom();
+    if (room.gameState?.phase === 'game_over') await this.recordCompletedGame(room);
     await this.scheduleBotIfNeeded();
     this.broadcastGame(tokenMove);
   }

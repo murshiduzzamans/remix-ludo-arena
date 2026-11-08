@@ -16,6 +16,7 @@ export interface User {
   googleSub: string | null;
   githubId?: string | null;
   syncCode?: string | null;
+  avatarUrl?: string | null;
   lastSeenAt: number;
   deletedAt: number | null;
 }
@@ -48,6 +49,9 @@ export interface Match {
   mode: string;
   playerCount: number;
   hadBots: boolean;
+  publishedAt?: number | null;
+  ownerUserId?: string | null;
+  progressSyncedAt?: number | null;
 }
 
 export interface MatchPlayer {
@@ -65,6 +69,7 @@ export interface PublicProfile {
   id: string;
   displayName: string;
   avatarId: number;
+  avatarUrl?: string | null;
   level: number;
   stats: {
     gamesPlayed: number;
@@ -77,6 +82,7 @@ export interface LeaderboardEntry {
   userId: string;
   displayName: string;
   avatarId: number;
+  avatarUrl?: string | null;
   level: number;
   wins: number;
   gamesPlayed: number;

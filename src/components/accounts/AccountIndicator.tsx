@@ -10,6 +10,7 @@ interface AccountUser {
   id: string;
   displayName: string;
   avatarId: number;
+  avatarUrl?: string | null;
   isGuest: boolean;
   level: number;
   hasGithub?: boolean;
@@ -37,6 +38,7 @@ export function AccountIndicator() {
   const [restoreInput, setRestoreInput] = useState('');
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -76,11 +78,7 @@ export function AccountIndicator() {
         const data = (await response.json()) as { user: AccountUser; stats: AccountStats };
         setUser(data.user);
         setStats(data.stats);
-        if (data.user.syncCode) {
-          setSyncCode(data.user.syncCode);
-        } else {
-          fetchSyncCode();
-        }
+        fetchSyncCode();
       }
     } catch (error) {
       console.error('Failed to fetch account:', error);
@@ -95,9 +93,13 @@ export function AccountIndicator() {
       if (res.ok) {
         const data = (await res.json()) as { syncCode: string };
         setSyncCode(data.syncCode);
+      } else {
+        const errorData = await res.json().catch(() => ({ error: 'Failed to fetch sync code' }));
+        console.error('Failed to fetch sync code:', errorData);
+        // Show error in UI if you have a global error handling system
       }
-    } catch {
-      // Ignore background sync code error
+    } catch (error) {
+      console.error('Error fetching sync code:', error);
     }
   };
 
@@ -139,7 +141,10 @@ export function AccountIndicator() {
       }
 
       setShowSyncModal(false);
-      window.location.reload();
+      await fetchAccount();
+      setRestoreInput('');
+      setRestoreError(null);
+      setShowMenu(false);
     } catch {
       setRestoreError('Network error. Please try again.');
       setRestoring(false);
@@ -148,15 +153,24 @@ export function AccountIndicator() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', {
+      const response = await fetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'include',
       });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to log out' }));
+        console.error('Logout failed:', errorData);
+        setLogoutError(errorData.error || 'Failed to log out. Please try again.');
+        return;
+      }
       setUser(null);
       setStats(null);
-      window.location.reload();
+      setSyncCode(null);
+      setLogoutError(null);
+      setShowMenu(false);
     } catch (error) {
       console.error('Logout failed:', error);
+      setLogoutError('Network error. Please try again.');
     }
   };
 
@@ -273,9 +287,13 @@ export function AccountIndicator() {
     <div className="relative w-full">
       <div className="w-full px-4 py-2.5 bg-slate-900/80 rounded-2xl border border-slate-700/60 shadow flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-slate-950 font-black text-sm shadow">
-            {user.displayName.charAt(0).toUpperCase()}
-          </div>
+          {user.avatarUrl ? (
+            <img src={user.avatarUrl} alt={`${user.displayName}'s profile`} className="w-9 h-9 rounded-xl object-cover shadow" />
+          ) : (
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-slate-950 font-black text-sm shadow">
+              {user.displayName.charAt(0).toUpperCase()}
+            </div>
+          )}
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-bold text-xs text-white">{user.displayName}</span>
@@ -306,6 +324,10 @@ export function AccountIndicator() {
           </svg>
         </button>
       </div>
+
+      {logoutError && (
+        <p className="text-xs text-red-400 mt-1 text-right" role="alert">{logoutError}</p>
+      )}
 
       {showMenu && (
         <>
