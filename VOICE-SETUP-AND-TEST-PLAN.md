@@ -43,6 +43,18 @@ npx wrangler secret put REALTIMEKIT_VOICE_PRESET
 npx wrangler secret put VOICE_BUDGET_ADMIN_SECRET
 ```
 
+> **Windows gotcha (verified in this project):** piping the value from PowerShell
+> into `wrangler secret put` (`$v | npx wrangler secret put ...`) corrupts every
+> secret with a trailing `\r\n`, which then never matches at runtime (the admin
+> endpoint returns 401 and voice joins fail). Use a no-newline ASCII temp file
+> and pipe it through `cmd` instead:
+>
+> ```powershell
+> Set-Content .tmp-secret.txt -Value '<value>' -NoNewline -Encoding ASCII
+> cmd /c 'type .tmp-secret.txt | npx wrangler secret put SECRET_NAME'
+> Remove-Item .tmp-secret.txt
+> ```
+
 Optional overrides (defaults in brackets):
 
 ```
