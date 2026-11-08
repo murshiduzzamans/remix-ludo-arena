@@ -151,9 +151,8 @@ function createsThreat(move: MoveAction, color: PlayerColor, players: Player[], 
     for (const token of enemy.tokens) {
       if (token.stepCount < 0 || token.stepCount > LAST_TRACK_STEP) continue;
       const enemyCell = trackIndex(enemy.color, token.stepCount);
-      const distance = (enemyCell - cell + TOTAL_TRACK_CELLS) % TOTAL_TRACK_CELLS;
-      if (distance >= 1 && distance <= 6 && token.stepCount + distance <= LAST_TRACK_STEP &&
-        !isSafeCell(enemyCell, rules) && !blockAt(players, enemyCell, color, rules, isTeamMode)) return true;
+      // Reach is judged from the mover's landing step, not the enemy's own step count.
+      if (!isSafeCell(enemyCell, rules) && canReach(color, move.toStep, enemyCell, players, rules, isTeamMode)) return true;
     }
   }
   return false;

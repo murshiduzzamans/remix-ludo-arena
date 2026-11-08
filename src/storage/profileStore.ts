@@ -461,6 +461,9 @@ export function recordMatchOutcome(record: MatchRecord & { matchId?: string }): 
       history: nextHistory,
       processedMatchIds: [...(previous?.processedMatchIds ?? []), matchId].slice(-500),
     }));
+    // Mirror the updated profile so the fallback PROFILE_KEY snapshot never lags
+    // behind matches recorded through the result ledger.
+    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(updatedProfile)); } catch {}
   } catch {}
 }
 
@@ -487,12 +490,14 @@ function loadResultState(): ResultState | null {
     const profile = validateProfile(state.profile);
     if (state.version !== 2 || !profile.ok || !Array.isArray(state.history) || !Array.isArray(state.processedMatchIds)) return null;
     const validatedHistory = state.history.map(validateMatchRecord);
-    if (validatedHistory.some((entry) => !entry.ok) || !state.processedMatchIds.every((id) => typeof id === 'string')) return null;
+    // A single corrupt entry must not void the whole ledger: drop bad history
+    // entries and non-string idempotency ids instead of returning null, which
+    // would reset stats and re-credit already-processed matches.
     return {
       version: 2,
       profile: profile.value,
       history: validatedHistory.flatMap((entry) => entry.ok ? [entry.value] : []),
-      processedMatchIds: state.processedMatchIds,
+      processedMatchIds: state.processedMatchIds.filter((id) => typeof id === 'string'),
     };
   } catch {
     return null;

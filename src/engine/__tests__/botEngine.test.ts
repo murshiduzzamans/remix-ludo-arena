@@ -252,4 +252,37 @@ describe('BotEngine evaluator and seeded choices', () => {
   });
 });
 
+describe('BotEngine - threat reachability uses the mover\u0027s landing step', () => {
+  const threatMove = (fromStep: number, toStep: number) => ({
+    tokenColor: 'red' as PlayerColor,
+    tokenIndex: 0,
+    fromStep,
+    toStep,
+    isExitYard: false,
+    isFinish: false,
+    willCaptureTokens: [],
+    isPartnerAssist: false,
+  });
+
+  it('flags an enemy four cells ahead even when that enemy is deep on its own track', () => {
+    // Red lands on cell 8 (step 7); green sits on cell 12, four cells ahead of red,
+    // near the end of green's own shared track (step 50). The enemy's step count
+    // says nothing about whether red can reach it: red only needs steps 8..12.
+    const player = makePlayer('red', [makeToken('red', 0, 4)]);
+    const enemy = makePlayer('green', [makeToken('green', 0, 50)]);
+    const [explanation] = explainBotMoves([threatMove(4, 7)], player, [player, enemy], DEFAULT_RULES, false);
+    expect(explanation.breakdown.threatCreation).toBe(2.5);
+  });
+
+  it('does not flag an enemy the mover cannot reach before entering its home column', () => {
+    // Red lands on cell 49 (step 48); green sits on cell 3, six cells ahead in
+    // wrap-around distance, but red's shared track ends at cell 51, so the
+    // green token can never be caught by this token.
+    const player = makePlayer('red', [makeToken('red', 0, 45)]);
+    const enemy = makePlayer('green', [makeToken('green', 0, 41)]);
+    const [explanation] = explainBotMoves([threatMove(45, 48)], player, [player, enemy], DEFAULT_RULES, false);
+    expect(explanation.breakdown.threatCreation).toBe(0);
+  });
+});
+
 

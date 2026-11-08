@@ -204,4 +204,40 @@ describe('ProfileStore - Phase 3 Security & Data Integrity', () => {
     }
     expect(loadMatchHistory()).toHaveLength(25);
   });
+
+  it('tolerates a corrupted history entry without wiping the ledger', () => {
+    recordMatchOutcome(baseRecord);
+    expect(loadProfile().totalMatches).toBe(1);
+
+    const ledger = JSON.parse(localStorageMock['ludo_arena_result_state_v2']);
+    ledger.history.unshift({ id: 'broken', corrupt: true });
+    localStorageMock['ludo_arena_result_state_v2'] = JSON.stringify(ledger);
+
+    // The profile survives and only the bad history entry is dropped.
+    expect(loadProfile().totalMatches).toBe(1);
+    const history = loadMatchHistory();
+    expect(history.some((entry) => entry.id === 'broken')).toBe(false);
+    expect(history.some((entry) => entry.id === 'test-match-1')).toBe(true);
+
+    // Idempotency still holds: a re-submission is not double-credited.
+    recordMatchOutcome(baseRecord);
+    expect(loadProfile().totalMatches).toBe(1);
+  });
+
+  it('mirrors the recorded profile into the legacy profile key', () => {
+    expect(loadProfile()).toEqual(DEFAULT_PROFILE);
+
+    recordMatchOutcome(baseRecord);
+
+    const mirrored = loadProfile();
+    expect(mirrored.xp).toBe(100);
+    expect(mirrored.totalMatches).toBe(1);
+    expect(mirrored.totalWins).toBe(1);
+    // The fallback snapshot matches the ledger profile.
+    expect(JSON.parse(localStorageMock['ludo_arena_profile_v1'])).toMatchObject({
+      xp: 100,
+      totalMatches: 1,
+      totalWins: 1,
+    });
+  });
 });
