@@ -28,7 +28,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [nameInput, setNameInput] = useState(profile.name);
   const [selectedAvatar, setSelectedAvatar] = useState('👩');
-
   const avatarOptions = ['👩', '👦', '🦁', '🏎️', '👑', '🦊', '🐯', '🥷'];
 
   const handleSaveName = () => {

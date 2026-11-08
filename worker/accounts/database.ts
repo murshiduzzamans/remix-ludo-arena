@@ -12,6 +12,7 @@ import type { D1Database } from '@cloudflare/workers-types';
 import type { User, Session, PlayerStats, Match, MatchPlayer, LeaderboardEntry, PublicProfile, UserWithStats } from './types';
 import { hashToken } from '../auth/crypto';
 import { calculateLevel } from './config';
+import { generateSyncCode } from '../auth/syncCode';
 
 /**
  * Creates a new guest user
@@ -22,6 +23,7 @@ export async function createGuestUser(
   avatarId: number
 ): Promise<User> {
   const now = Date.now();
+  const syncCode = generateSyncCode();
   const user: User = {
     id: crypto.randomUUID(),
     createdAt: now,
@@ -29,6 +31,8 @@ export async function createGuestUser(
     avatarId,
     isGuest: true,
     googleSub: null,
+    githubId: null,
+    syncCode,
     lastSeenAt: now,
     deletedAt: null,
   };
@@ -36,9 +40,9 @@ export async function createGuestUser(
   // Use batch to create user and initialize stats atomically
   const results = await db.batch([
     db.prepare(
-      `INSERT INTO users (id, created_at, display_name, avatar_id, is_guest, google_sub, last_seen_at, deleted_at)
-       VALUES (?, ?, ?, ?, 1, NULL, ?, NULL)`
-    ).bind(user.id, user.createdAt, user.displayName, user.avatarId, user.lastSeenAt),
+      `INSERT INTO users (id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at)
+       VALUES (?, ?, ?, ?, 1, NULL, NULL, ?, ?, NULL)`
+    ).bind(user.id, user.createdAt, user.displayName, user.avatarId, user.syncCode, user.lastSeenAt),
     db.prepare(
       `INSERT INTO player_stats (user_id, games_played, wins, losses, abandons, captures, tokens_finished, xp, level, practice_games, updated_at)
        VALUES (?, 0, 0, 0, 0, 0, 0, 0, 1, 0, ?)`
@@ -95,7 +99,7 @@ export async function findAndRefreshSession(
   const result = await db.prepare(
     `SELECT
       s.id_hash, s.user_id, s.created_at, s.expires_at, s.last_seen_at,
-      u.id, u.created_at as user_created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.last_seen_at as user_last_seen_at, u.deleted_at
+      u.id, u.created_at as user_created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.github_id, u.sync_code, u.last_seen_at as user_last_seen_at, u.deleted_at
      FROM sessions s
      JOIN users u ON s.user_id = u.id
      WHERE s.id_hash = ? AND s.expires_at > ? AND u.deleted_at IS NULL`
@@ -117,7 +121,9 @@ export async function findAndRefreshSession(
     displayName: result.display_name as string,
     avatarId: result.avatar_id as number,
     isGuest: Boolean(result.is_guest),
-    googleSub: result.google_sub as string | null,
+    googleSub: (result.google_sub as string | null) ?? null,
+    githubId: (result.github_id as string | null) ?? null,
+    syncCode: (result.sync_code as string | null) ?? null,
     lastSeenAt: result.user_last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };
@@ -148,7 +154,7 @@ export async function deleteSession(db: D1Database, sessionToken: string): Promi
  */
 export async function findUserByGoogleSub(db: D1Database, googleSub: string): Promise<User | null> {
   const result = await db.prepare(
-    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, last_seen_at, deleted_at
+    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at
      FROM users
      WHERE google_sub = ? AND deleted_at IS NULL`
   ).bind(googleSub).first();
@@ -161,10 +167,106 @@ export async function findUserByGoogleSub(db: D1Database, googleSub: string): Pr
     displayName: result.display_name as string,
     avatarId: result.avatar_id as number,
     isGuest: Boolean(result.is_guest),
-    googleSub: result.google_sub as string | null,
+    googleSub: (result.google_sub as string | null) ?? null,
+    githubId: (result.github_id as string | null) ?? null,
+    syncCode: (result.sync_code as string | null) ?? null,
     lastSeenAt: result.last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };
+}
+
+/**
+ * Finds a user by GitHub ID
+ */
+export async function findUserByGithubId(db: D1Database, githubId: string): Promise<User | null> {
+  const result = await db.prepare(
+    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at
+     FROM users
+     WHERE github_id = ? AND deleted_at IS NULL`
+  ).bind(githubId).first();
+
+  if (!result) return null;
+
+  return {
+    id: result.id as string,
+    createdAt: result.created_at as number,
+    displayName: result.display_name as string,
+    avatarId: result.avatar_id as number,
+    isGuest: Boolean(result.is_guest),
+    googleSub: (result.google_sub as string | null) ?? null,
+    githubId: (result.github_id as string | null) ?? null,
+    syncCode: (result.sync_code as string | null) ?? null,
+    lastSeenAt: result.last_seen_at as number,
+    deletedAt: result.deleted_at as number | null,
+  };
+}
+
+/**
+ * Links a GitHub account to a guest user
+ */
+export async function linkGithubAccount(
+  db: D1Database,
+  userId: string,
+  githubId: string,
+  displayName: string
+): Promise<void> {
+  await db.prepare(
+    `UPDATE users
+     SET github_id = ?, is_guest = 0, display_name = ?
+     WHERE id = ?`
+  ).bind(githubId, displayName, userId).run();
+}
+
+/**
+ * Finds a user by their sync/recovery code
+ */
+export async function findUserBySyncCode(db: D1Database, syncCode: string): Promise<User | null> {
+  const result = await db.prepare(
+    `SELECT id, created_at, display_name, avatar_id, is_guest, google_sub, github_id, sync_code, last_seen_at, deleted_at
+     FROM users
+     WHERE sync_code = ? AND deleted_at IS NULL`
+  ).bind(syncCode).first();
+
+  if (!result) return null;
+
+  return {
+    id: result.id as string,
+    createdAt: result.created_at as number,
+    displayName: result.display_name as string,
+    avatarId: result.avatar_id as number,
+    isGuest: Boolean(result.is_guest),
+    googleSub: (result.google_sub as string | null) ?? null,
+    githubId: (result.github_id as string | null) ?? null,
+    syncCode: (result.sync_code as string | null) ?? null,
+    lastSeenAt: result.last_seen_at as number,
+    deletedAt: result.deleted_at as number | null,
+  };
+}
+
+/**
+ * Ensures user has a sync code, creating one if not present
+ */
+export async function ensureUserSyncCode(db: D1Database, userId: string): Promise<string> {
+  const existing = await db.prepare(
+    `SELECT sync_code FROM users WHERE id = ? AND deleted_at IS NULL`
+  ).bind(userId).first();
+
+  if (existing?.sync_code && typeof existing.sync_code === 'string') {
+    return existing.sync_code;
+  }
+
+  const newCode = generateSyncCode();
+  await db.prepare(
+    `UPDATE users SET sync_code = ? WHERE id = ? AND deleted_at IS NULL AND sync_code IS NULL`
+  ).bind(newCode, userId).run();
+
+  const saved = await db.prepare(
+    `SELECT sync_code FROM users WHERE id = ? AND deleted_at IS NULL`
+  ).bind(userId).first();
+  if (!saved || typeof saved.sync_code !== 'string') {
+    throw new Error('Failed to assign a sync code to the user.');
+  }
+  return saved.sync_code;
 }
 
 /**
@@ -244,7 +346,7 @@ export async function mergeGuestIntoAccount(
 export async function getUserWithStats(db: D1Database, userId: string): Promise<UserWithStats | null> {
   const result = await db.prepare(
     `SELECT
-      u.id, u.created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.last_seen_at, u.deleted_at,
+      u.id, u.created_at, u.display_name, u.avatar_id, u.is_guest, u.google_sub, u.github_id, u.sync_code, u.last_seen_at, u.deleted_at,
       s.games_played, s.wins, s.losses, s.abandons, s.captures, s.tokens_finished, s.xp, s.level, s.practice_games, s.updated_at
      FROM users u
      LEFT JOIN player_stats s ON u.id = s.user_id
@@ -259,7 +361,9 @@ export async function getUserWithStats(db: D1Database, userId: string): Promise<
     displayName: result.display_name as string,
     avatarId: result.avatar_id as number,
     isGuest: Boolean(result.is_guest),
-    googleSub: result.google_sub as string | null,
+    googleSub: (result.google_sub as string | null) ?? null,
+    githubId: (result.github_id as string | null) ?? null,
+    syncCode: (result.sync_code as string | null) ?? null,
     lastSeenAt: result.last_seen_at as number,
     deletedAt: result.deleted_at as number | null,
   };

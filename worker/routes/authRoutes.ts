@@ -8,11 +8,25 @@
  */
 
 import type { D1Database } from '@cloudflare/workers-types';
-import { createGuestSession, validateSession, logout, linkOrMergeGoogleAccount, getProfile, updateProfile, deleteAccount, getPublic, getLeaderboard } from '../accounts/service';
+import {
+  createGuestSession,
+  validateSession,
+  logout,
+  linkOrMergeGoogleAccount,
+  linkOrMergeGithubAccount,
+  getUserSyncCode,
+  restoreAccountWithSyncCode,
+  getProfile,
+  updateProfile,
+  deleteAccount,
+  getPublic,
+  getLeaderboard,
+} from '../accounts/service';
 import { createOAuthState, buildAuthorizationUrl, exchangeCodeForTokens, verifyIdToken } from '../auth/google';
+import { buildGithubAuthUrl, exchangeGithubCodeForToken, fetchGithubUser } from '../auth/github';
 import { createSessionCookie, createOAuthStateCookie, clearCookie, getCookie } from '../auth/cookies';
 import { signData, verifySignature } from '../auth/crypto';
-import { validateDisplayName, validateAvatarId, isInAppBrowser, isOriginAllowed } from '../auth/validation';
+import { validateDisplayName, validateAvatarId, isInAppBrowser, isOriginAllowed, hasRequiredHeader } from '../auth/validation';
 import { LEADERBOARD_CONFIG } from '../accounts/config';
 
 interface Env {
@@ -20,6 +34,8 @@ interface Env {
   ACCOUNTS_ENABLED?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
   SESSION_SECRET?: string;
   ALLOWED_ORIGINS?: string;
 }
@@ -37,7 +53,7 @@ function json(data: unknown, status = 200, origin: string | null = '*'): Respons
 }
 
 function isAccountsEnabled(env: Env): boolean {
-  return env.ACCOUNTS_ENABLED === 'true' && Boolean(env.DB && env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.SESSION_SECRET);
+  return env.ACCOUNTS_ENABLED === 'true' && Boolean(env.DB && env.SESSION_SECRET);
 }
 
 function getRedirectUri(request: Request, path: string): string {
@@ -107,10 +123,14 @@ export async function handleGoogleAuthStart(request: Request, env: Env): Promise
     return new Response('Accounts are not enabled.', { status: 503 });
   }
 
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+    return new Response('Google sign-in is not configured.', { status: 501 });
+  }
+
   // Check for in-app browser
   const userAgent = request.headers.get('User-Agent') ?? '';
   if (isInAppBrowser(userAgent)) {
-    return new Response(
+    const response = new Response(
       `<!DOCTYPE html>
 <html>
 <head><title>Open in Browser</title></head>
@@ -235,6 +255,7 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
     if (!currentUserId) {
       const displayName = claims.name ?? claims.email?.split('@')[0] ?? 'Player';
       const { user, sessionToken: guestToken } = await createGuestSession(env.DB!, displayName, 0);
+      await logout(env.DB!, guestToken);
       currentUserId = user.id;
     }
 
@@ -250,7 +271,7 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
     const cookie = createSessionCookie(result.sessionToken);
     const clearStateCookie = clearCookie('__Host-oauth-state');
 
-    return new Response(
+    const response = new Response(
       `<!DOCTYPE html>
 <html>
 <head><title>Login Successful</title></head>
@@ -267,10 +288,12 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
         status: 200,
         headers: {
           'Content-Type': 'text/html',
-          'Set-Cookie': [cookie, clearStateCookie].join(', '),
         },
       }
     );
+    response.headers.append('Set-Cookie', cookie);
+    response.headers.append('Set-Cookie', clearStateCookie);
+    return response;
   } catch (error) {
     console.error('OAuth callback error:', error);
     return new Response('Authentication failed.', { status: 500 });
@@ -344,6 +367,8 @@ export async function handleGetMe(request: Request, env: Env): Promise<Response>
         avatarId: userWithStats.avatarId,
         isGuest: userWithStats.isGuest,
         level: userWithStats.stats.level,
+        hasGithub: Boolean(userWithStats.githubId),
+        hasGoogle: Boolean(userWithStats.googleSub),
       },
       stats: {
         gamesPlayed: userWithStats.stats.gamesPlayed,
@@ -493,5 +518,257 @@ export async function handleGetLeaderboard(request: Request, env: Env): Promise<
   } catch (error) {
     console.error('Get leaderboard error:', error);
     return json({ error: 'Failed to get leaderboard.' }, 500);
+  }
+}
+
+/**
+ * GET /api/auth/github/start - Start GitHub OAuth flow
+ */
+export async function handleGithubAuthStart(request: Request, env: Env): Promise<Response> {
+  if (!isAccountsEnabled(env)) {
+    return new Response('Accounts are not enabled.', { status: 503 });
+  }
+
+  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
+    return new Response('GitHub sign-in is not configured.', { status: 501 });
+  }
+
+  const redirectUri = getRedirectUri(request, '/api/auth/github/callback');
+  const oauthState = createOAuthState(redirectUri);
+
+  const stateData = JSON.stringify(oauthState);
+  const signature = await signData(stateData, env.SESSION_SECRET!);
+  const signedState = `${stateData}.${signature}`;
+
+  try {
+    const authUrl = buildGithubAuthUrl(
+      env.GITHUB_CLIENT_ID,
+      redirectUri,
+      oauthState.state
+    );
+
+    const stateCookie = createOAuthStateCookie(signedState);
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: authUrl,
+        'Set-Cookie': stateCookie,
+      },
+    });
+  } catch (error) {
+    console.error('GitHub OAuth start error:', error);
+    return new Response('Failed to start GitHub authentication.', { status: 500 });
+  }
+}
+
+/**
+ * GET /api/auth/github/callback - Handle GitHub OAuth callback
+ */
+export async function handleGithubAuthCallback(request: Request, env: Env): Promise<Response> {
+  if (!isAccountsEnabled(env)) {
+    return new Response('Accounts are not enabled.', { status: 503 });
+  }
+
+  const url = new URL(request.url);
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+
+  if (!code || !state) {
+    return new Response('Missing code or state parameter.', { status: 400 });
+  }
+
+  const signedState = getCookie(request, '__Host-oauth-state');
+  if (!signedState) {
+    return new Response('Invalid state cookie.', { status: 400 });
+  }
+
+  const [stateData, signature] = signedState.split('.');
+  if (!stateData || !signature) {
+    return new Response('Malformed state cookie.', { status: 400 });
+  }
+
+  const isValid = await verifySignature(stateData, signature, env.SESSION_SECRET!);
+  if (!isValid) {
+    return new Response('Invalid OAuth state signature.', { status: 400 });
+  }
+
+  let oauthState: ReturnType<typeof createOAuthState>;
+  try {
+    oauthState = JSON.parse(stateData);
+  } catch {
+    return new Response('Invalid OAuth state format.', { status: 400 });
+  }
+
+  if (oauthState.state !== state) {
+    return new Response('State mismatch.', { status: 400 });
+  }
+
+  if (Date.now() > oauthState.expiresAt) {
+    return new Response('OAuth state expired.', { status: 400 });
+  }
+
+  const redirectUri = getRedirectUri(request, '/api/auth/github/callback');
+
+  try {
+    const accessToken = await exchangeGithubCodeForToken(
+      env.GITHUB_CLIENT_ID!,
+      env.GITHUB_CLIENT_SECRET!,
+      code,
+      redirectUri
+    );
+
+    const githubUser = await fetchGithubUser(accessToken);
+    const displayName = validateDisplayName(githubUser.name) ??
+      validateDisplayName(githubUser.login) ??
+      'Player';
+
+    // Get current session if exists
+    const sessionToken = getCookie(request, '__Host-session');
+    let currentUserId: string | undefined;
+
+    if (sessionToken) {
+      const session = await validateSession(env.DB!, sessionToken);
+      currentUserId = session?.user.id;
+    }
+
+    // If no current session, create guest first
+    if (!currentUserId) {
+      const { user: newGuest, sessionToken: guestToken } = await createGuestSession(env.DB!, displayName, 0);
+      await logout(env.DB!, guestToken);
+      currentUserId = newGuest.id;
+    }
+
+    const result = await linkOrMergeGithubAccount(
+      env.DB!,
+      currentUserId,
+      githubUser.id,
+      displayName
+    );
+
+    const cookie = createSessionCookie(result.sessionToken);
+    const clearStateCookie = clearCookie('__Host-oauth-state');
+
+    const response = new Response(
+      `<!DOCTYPE html>
+<html>
+<head><title>Login Successful</title></head>
+<body style="font-family: system-ui; text-align: center; padding: 2rem;">
+  <h1>✓ GitHub Login Successful</h1>
+  <p>${result.merged ? 'Your progress has been merged.' : 'Your account is connected.'}</p>
+  <p>Redirecting to Ludo Arena...</p>
+  <script>
+    setTimeout(() => window.location.href = '/', 1200);
+  </script>
+</body>
+</html>`,
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/html',
+        },
+      }
+    );
+    response.headers.append('Set-Cookie', cookie);
+    response.headers.append('Set-Cookie', clearStateCookie);
+    return response;
+  } catch (error) {
+    console.error('GitHub callback error:', error);
+    return new Response('Authentication failed.', { status: 500 });
+  }
+}
+
+/**
+ * GET /api/auth/sync-code - Get or generate current player's sync code
+ */
+export async function handleGetSyncCode(request: Request, env: Env): Promise<Response> {
+  if (!isAccountsEnabled(env)) {
+    return json({ error: 'Accounts are not enabled.' }, 503);
+  }
+
+  const sessionToken = getCookie(request, '__Host-session');
+  if (!sessionToken) {
+    return json({ error: 'Not authenticated.' }, 401);
+  }
+
+  try {
+    const session = await validateSession(env.DB!, sessionToken);
+    if (!session) {
+      return json({ error: 'Session expired.' }, 401);
+    }
+
+    const syncCode = await getUserSyncCode(env.DB!, session.user.id);
+    return json({ syncCode });
+  } catch (error) {
+    console.error('Get sync code error:', error);
+    return json({ error: 'Failed to retrieve sync code.' }, 500);
+  }
+}
+
+/**
+ * POST /api/auth/sync-restore - Restore account on this device using sync code
+ */
+export async function handleRestoreWithSyncCode(request: Request, env: Env): Promise<Response> {
+  if (!isAccountsEnabled(env)) {
+    return json({ error: 'Accounts are not enabled.' }, 503);
+  }
+
+  const allowedOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map(o => o.trim()).filter(Boolean);
+  if (!isOriginAllowed(request, allowedOrigins) ||
+      !hasRequiredHeader(request, 'X-Ludo-Action') ||
+      request.headers.get('X-Ludo-Action') !== 'sync-restore') {
+    return json({ error: 'Origin or request validation failed.' }, 403, null);
+  }
+
+  let body: { syncCode?: unknown };
+  try {
+    body = await request.json() as { syncCode?: unknown };
+  } catch {
+    return json({ error: 'Invalid request body.' }, 400);
+  }
+
+  if (typeof body.syncCode !== 'string' || !body.syncCode.trim()) {
+    return json({ error: 'Please enter your sync code (e.g. LUDO-XXXX-XXXX-XXXX-XXXX).' }, 400);
+  }
+
+  try {
+    const restored = await restoreAccountWithSyncCode(env.DB!, body.syncCode);
+    if (!restored) {
+      return json({ error: 'Sync code not found. Check the code and try again.' }, 404);
+    }
+
+    const profile = await getProfile(env.DB!, restored.user.id);
+    if (!profile) {
+      return json({ error: 'Restored profile not found.' }, 404);
+    }
+    const cookie = createSessionCookie(restored.sessionToken);
+
+    return new Response(JSON.stringify({
+      user: {
+        id: profile.id,
+        displayName: profile.displayName,
+        avatarId: profile.avatarId,
+        isGuest: profile.isGuest,
+        level: profile.stats.level,
+      },
+      stats: {
+        gamesPlayed: profile.stats.gamesPlayed,
+        wins: profile.stats.wins,
+        losses: profile.stats.losses,
+        captures: profile.stats.captures,
+        xp: profile.stats.xp,
+        level: profile.stats.level,
+      },
+    }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Set-Cookie': cookie,
+        'Access-Control-Allow-Credentials': 'true',
+      },
+    });
+  } catch (error) {
+    console.error('Restore sync code error:', error);
+    return json({ error: 'Failed to restore account.' }, 500);
   }
 }

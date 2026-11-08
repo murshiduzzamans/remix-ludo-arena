@@ -14,6 +14,8 @@ export interface User {
   avatarId: number;
   isGuest: boolean;
   googleSub: string | null;
+  githubId?: string | null;
+  syncCode?: string | null;
   lastSeenAt: number;
   deletedAt: number | null;
 }

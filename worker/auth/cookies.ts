@@ -34,7 +34,7 @@ export function createSessionCookie(token: string, maxAge = SESSION_DURATION_MS)
  */
 export function createOAuthStateCookie(state: string): string {
   const maxAgeSeconds = 5 * 60; // 5 minutes
-  return `${OAUTH_STATE_COOKIE_NAME}=${state}; Max-Age=${maxAgeSeconds}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+  return `${OAUTH_STATE_COOKIE_NAME}=${encodeURIComponent(state)}; Max-Age=${maxAgeSeconds}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }
 
 /**
@@ -56,7 +56,12 @@ export function parseCookies(cookieHeader: string | null): Record<string, string
   for (const pair of pairs) {
     const [name, ...valueParts] = pair.trim().split('=');
     if (name && valueParts.length > 0) {
-      cookies[name] = valueParts.join('=');
+      const value = valueParts.join('=');
+      try {
+        cookies[name] = decodeURIComponent(value);
+      } catch {
+        cookies[name] = value;
+      }
     }
   }
 

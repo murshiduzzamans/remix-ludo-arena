@@ -5,7 +5,21 @@ import { advanceIfStuck, applyMove, createDiceSource, createInitialGameState, fo
 import { DEFAULT_RULES } from '../src/engine/gameEngine';
 import type { GameMode, GameRules, GameState, PlayerColor } from '../src/engine/types';
 import type { ChatMessage, ChatReaction, OnlineTokenMove, RoomParticipant, RoomSnapshot, ServerMessage } from '../src/network/protocol';
-import { handleGuestAuth, handleGoogleAuthStart, handleGoogleAuthCallback, handleLogout, handleGetMe, handleUpdateMe, handleDeleteMe, handleGetPublicProfile, handleGetLeaderboard } from './routes/authRoutes';
+import {
+  handleGuestAuth,
+  handleGoogleAuthStart,
+  handleGoogleAuthCallback,
+  handleGithubAuthStart,
+  handleGithubAuthCallback,
+  handleGetSyncCode,
+  handleRestoreWithSyncCode,
+  handleLogout,
+  handleGetMe,
+  handleUpdateMe,
+  handleDeleteMe,
+  handleGetPublicProfile,
+  handleGetLeaderboard,
+} from './routes/authRoutes';
 import type { D1Database } from '@cloudflare/workers-types';
 
 export { VoiceBudget } from './voiceBudget';
@@ -27,6 +41,8 @@ interface Env {
   ACCOUNTS_ENABLED?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
   SESSION_SECRET?: string;
   CREATE_ROOM_LIMITER?: { limit(input: { key: string }): Promise<{ success: boolean }> };
   JOIN_ROOM_LIMITER?: { limit(input: { key: string }): Promise<{ success: boolean }> };
@@ -153,7 +169,7 @@ function json(data: unknown, status = 200, origin: string | null = '*'): Respons
       'Content-Type': 'application/json; charset=utf-8',
       ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Ludo-Action',
       'Cache-Control': 'no-store',
     },
   });
@@ -339,7 +355,7 @@ export default {
       headers: {
         'Access-Control-Allow-Origin': corsOrigin,
         'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Ludo-Action',
         'Access-Control-Max-Age': '86400',
       },
     });
@@ -355,6 +371,21 @@ export default {
     }
     if (url.pathname === '/api/auth/google/callback' && request.method === 'GET') {
       return handleGoogleAuthCallback(request, env);
+    }
+    if (url.pathname === '/api/auth/github/start' && request.method === 'GET') {
+      return handleGithubAuthStart(request, env);
+    }
+    if (url.pathname === '/api/auth/github/callback' && request.method === 'GET') {
+      return handleGithubAuthCallback(request, env);
+    }
+    if (url.pathname === '/api/auth/sync-code' && request.method === 'GET') {
+      return handleGetSyncCode(request, env);
+    }
+    if (url.pathname === '/api/auth/sync-restore' && request.method === 'POST') {
+      const limitStatus = await rateLimitStatus(env.JOIN_ROOM_LIMITER, request);
+      if (limitStatus === 'limited') return json({ error: 'Too many restore attempts. Please wait a minute and try again.' }, 429, corsOrigin);
+      if (limitStatus === 'unavailable') return json({ error: 'Account recovery is temporarily unavailable.' }, 503, corsOrigin);
+      return handleRestoreWithSyncCode(request, env);
     }
     if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
       return handleLogout(request, env);

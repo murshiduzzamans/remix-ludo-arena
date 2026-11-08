@@ -9,7 +9,25 @@
 
 import type { D1Database } from '@cloudflare/workers-types';
 import { generateToken } from '../auth/crypto';
-import { createGuestUser, createSession, findAndRefreshSession, deleteSession as dbDeleteSession, findUserByGoogleSub, linkGoogleAccount, mergeGuestIntoAccount, getUserWithStats, updateUserProfile, deleteUserAccount, getPublicProfile, getLeaderboard as dbGetLeaderboard } from './database';
+import {
+  createGuestUser,
+  createSession,
+  findAndRefreshSession,
+  deleteSession as dbDeleteSession,
+  findUserByGoogleSub,
+  linkGoogleAccount,
+  findUserByGithubId,
+  linkGithubAccount,
+  findUserBySyncCode,
+  ensureUserSyncCode,
+  mergeGuestIntoAccount,
+  getUserWithStats,
+  updateUserProfile,
+  deleteUserAccount,
+  getPublicProfile,
+  getLeaderboard as dbGetLeaderboard,
+} from './database';
+import { normalizeSyncCode } from '../auth/syncCode';
 import { SESSION_CONFIG } from './config';
 import type { User, UserWithStats, PublicProfile, LeaderboardEntry } from './types';
 
@@ -93,6 +111,78 @@ export async function linkOrMergeGoogleAccount(
   const sessionToken = generateToken(32);
   await createSession(db, existingGoogleUser.id, sessionToken, SESSION_CONFIG.DURATION_MS);
   return { merged: false, userId: existingGoogleUser.id, sessionToken };
+}
+
+/**
+ * Links a GitHub account to the current user
+ * Returns whether a merge happened
+ */
+export async function linkOrMergeGithubAccount(
+  db: D1Database,
+  currentUserId: string,
+  githubId: string,
+  githubName: string
+): Promise<{ merged: boolean; userId: string; sessionToken: string }> {
+  const currentUser = await getUserWithStats(db, currentUserId);
+  if (!currentUser) {
+    throw new Error('Current user not found');
+  }
+
+  // Check if GitHub account already exists
+  const existingGithubUser = await findUserByGithubId(db, githubId);
+
+  if (!existingGithubUser) {
+    // New GitHub account - link it to current user
+    await linkGithubAccount(db, currentUserId, githubId, githubName);
+    const sessionToken = generateToken(32);
+    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS);
+    return { merged: false, userId: currentUserId, sessionToken };
+  }
+
+  // GitHub account already exists
+  if (existingGithubUser.id === currentUserId) {
+    const sessionToken = generateToken(32);
+    await createSession(db, currentUserId, sessionToken, SESSION_CONFIG.DURATION_MS);
+    return { merged: false, userId: currentUserId, sessionToken };
+  }
+
+  // Different users - merge guest into GitHub account if current is guest with progress
+  if (currentUser.isGuest && currentUser.stats.gamesPlayed > 0) {
+    await mergeGuestIntoAccount(db, existingGithubUser.id, currentUserId);
+    const sessionToken = generateToken(32);
+    await createSession(db, existingGithubUser.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+    return { merged: true, userId: existingGithubUser.id, sessionToken };
+  }
+
+  // Current user is not guest or has no progress - just switch to GitHub account
+  const sessionToken = generateToken(32);
+  await createSession(db, existingGithubUser.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+  return { merged: false, userId: existingGithubUser.id, sessionToken };
+}
+
+/**
+ * Gets or generates a sync code for a user
+ */
+export async function getUserSyncCode(db: D1Database, userId: string): Promise<string> {
+  return await ensureUserSyncCode(db, userId);
+}
+
+/**
+ * Restores an account using a sync code and creates a new session
+ */
+export async function restoreAccountWithSyncCode(
+  db: D1Database,
+  syncCodeInput: string
+): Promise<{ user: User; sessionToken: string } | null> {
+  const normalized = normalizeSyncCode(syncCodeInput);
+  if (!normalized) return null;
+
+  const user = await findUserBySyncCode(db, normalized);
+  if (!user) return null;
+
+  const sessionToken = generateToken(32);
+  await createSession(db, user.id, sessionToken, SESSION_CONFIG.DURATION_MS);
+  return { user, sessionToken };
 }
 
 /**

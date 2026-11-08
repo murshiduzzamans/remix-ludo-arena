@@ -21,6 +21,7 @@ import { sound } from '../../audio/soundEffects';
 import { GameMode } from '../../engine/types';
 import { loadProfile, saveProfile } from '../../storage/profileStore';
 import { usePWAInstall } from '../pwa/usePWAInstall';
+import { AccountIndicator } from '../accounts/AccountIndicator';
 
 interface LobbyScreenProps {
   onSelectMode: (mode: GameMode) => void;
@@ -155,6 +156,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
 
       {/* Main Container constrained to mobile phone canvas */}
       <div className="w-full max-w-[420px] mx-auto px-4 flex-1 flex flex-col justify-between py-2 space-y-3">
+        {/* Account & Sync Status */}
+        <AccountIndicator />
+
         {/* 2. Hero Logo & Isometric 3D Board Illustration */}
         <div className="flex flex-col items-center justify-center pt-1 select-none">
           {/* LUDO ARENA Title with Crown & Circles */}
