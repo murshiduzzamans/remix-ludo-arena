@@ -15,6 +15,7 @@ interface BudgetStateLike {
 interface ActiveVoiceSession {
   startedAt: number;
   elapsedMs: number;
+  activated?: boolean;
 }
 
 interface StoredBudget {
@@ -55,7 +56,10 @@ export class VoiceBudget {
     }
     if (stored.month !== currentMonth) {
       const active = Object.fromEntries(
-        Object.entries(stored.active).map(([id]) => [id, { startedAt: now, elapsedMs: 0 }])
+        Object.entries(stored.active).map(([id, session]) => [
+          id,
+          { startedAt: now, elapsedMs: 0, activated: session.activated === true },
+        ])
       );
       return { budget: { month: currentMonth, usedMinutes: 0, active }, changed: true };
     }
@@ -121,7 +125,7 @@ export class VoiceBudget {
       if (this.snapshot(budget, now, limitMinutes).totalMinutes >= limitMinutes) {
         return jsonResponse({ ok: false, code: 'VOICE_BUDGET_REACHED', snapshot: this.snapshot(budget, now, limitMinutes) }, 429);
       }
-      budget.active[body.sessionId] = { startedAt: now, elapsedMs: 0 };
+      budget.active[body.sessionId] = { startedAt: now, elapsedMs: 0, activated: false };
       await this.state.storage.put('budget', budget);
       return jsonResponse({ ok: true, snapshot: this.snapshot(budget, now, limitMinutes) });
     }
@@ -132,6 +136,7 @@ export class VoiceBudget {
       if (session) {
         session.elapsedMs += Math.max(0, now - session.startedAt);
         session.startedAt = now;
+        session.activated = true;
         await this.state.storage.put('budget', budget);
       } else await this.saveIfChanged(budget, changed);
       return jsonResponse({ ok: Boolean(session), snapshot: this.snapshot(budget, now, limitMinutes) });
@@ -142,7 +147,9 @@ export class VoiceBudget {
       const session = budget.active[body.sessionId];
       if (session) {
         const elapsedMs = session.elapsedMs + Math.max(0, now - session.startedAt);
-        budget.usedMinutes += Math.ceil(elapsedMs / 60_000);
+        budget.usedMinutes += session.activated
+          ? Math.max(1, Math.ceil(elapsedMs / 60_000))
+          : Math.ceil(elapsedMs / 60_000);
         delete budget.active[body.sessionId];
         await this.state.storage.put('budget', budget);
       } else await this.saveIfChanged(budget, changed);

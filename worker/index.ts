@@ -719,7 +719,13 @@ export class LudoRoom {
       if (existing) await this.deleteVoiceParticipant(meetingId, existing.participantId);
       created = await this.addVoiceParticipant(meetingId, participant);
     } catch {
-      if (!existing) {
+      if (existing) {
+        existing.leaving = true;
+        await this.saveRoom();
+        if (!(await this.leaveVoiceSeat(participant.id))) {
+          console.warn('Existing RealtimeKit participant cleanup failed after a rejoin failure.');
+        }
+      } else {
         try {
           await this.requestVoiceBudget('/leave', participant.id);
         } catch {
@@ -746,6 +752,7 @@ export class LudoRoom {
         room.voiceCheckpointAt ??= now;
       }
       await this.saveRoom();
+      await this.scheduleRoomAlarm();
       await this.leaveVoiceSeat(participant.id);
       throw new VoiceJoinError('VOICE_DISABLED');
     }
@@ -762,8 +769,26 @@ export class LudoRoom {
       });
       room.voiceCheckpointAt ??= now;
     }
-    this.voiceTokens.set(participant.id, created.authToken);
     await this.saveRoom();
+    await this.scheduleRoomAlarm();
+    let budgetCheckpoint: Awaited<ReturnType<LudoRoom['requestVoiceBudget']>>;
+    try {
+      budgetCheckpoint = await this.requestVoiceBudget('/checkpoint', participant.id);
+    } catch {
+      await this.leaveVoiceSeat(participant.id);
+      throw new VoiceJoinError('VOICE_UNAVAILABLE');
+    }
+    if (budgetCheckpoint.ok !== true) {
+      await this.leaveVoiceSeat(participant.id);
+      throw new VoiceJoinError('VOICE_UNAVAILABLE');
+    }
+    await this.reportVoiceBudgetWarning(budgetCheckpoint.snapshot);
+    if (this.room !== room || !this.voiceRoomAllowsJoin(room) || this.cancelledVoiceJoins.has(participant.id) ||
+      !room.participants.find((candidate) => candidate.id === participant.id)?.isConnected) {
+      await this.leaveVoiceSeat(participant.id);
+      throw new VoiceJoinError('VOICE_DISABLED');
+    }
+    this.voiceTokens.set(participant.id, created.authToken);
     this.broadcastVoiceStatus();
     this.send(socket, { type: 'voice_token', authToken: created.authToken });
     await this.scheduleRoomAlarm();
@@ -1091,7 +1116,7 @@ export class LudoRoom {
       room.chatEnabled = payload.enabled;
       await this.saveRoom();
       this.broadcastRoom();
-      if (room.chatEnabled) {
+      if (this.env.CHAT_ENABLED !== 'false' && room.chatEnabled) {
         const history = { type: 'chat_history', messages: this.chatMessages.slice() };
         for (const peer of this.ctx.getWebSockets()) {
           const peerAttachment = peer.deserializeAttachment() as { participantId?: string | null } | null;

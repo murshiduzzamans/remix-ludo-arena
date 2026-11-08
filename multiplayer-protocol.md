@@ -128,7 +128,7 @@ The room host controls the room-level `voiceEnabled` flag. Voice is unavailable 
 { "type": "voice_status", "seatsInVoice": ["red", "green"] }
 ```
 
-Server limits are four room participants in voice, five join attempts per connection per rolling minute, and three hours per voice session. The global budget defaults to 8,000 participant-minutes per UTC month and can be overridden with `VOICE_MONTHLY_MINUTE_LIMIT`. Participant-minutes are rounded up per participant; a warning is sent to each active room at 80%, new sessions are blocked at the cap, and active rooms disconnect voice when their next minute checkpoint observes the cap. `GET /api/admin/voice-budget` returns usage only when sent `Authorization: Bearer <VOICE_BUDGET_ADMIN_SECRET>`.
+Server limits are four room participants in voice, five join attempts per connection per rolling minute, and three hours per voice session. The `SERVER_ROOM_STATE` snapshot includes `voiceEnabled`, `voiceAvailable`, and `seatsInVoice` so the client can distinguish room settings from missing server configuration. The global budget defaults to 8,000 participant-minutes per UTC month and can be overridden with `VOICE_MONTHLY_MINUTE_LIMIT`. Participant-minutes are rounded up per participant; a warning is sent to each active room at 80%, new sessions are blocked at the cap, and active rooms disconnect voice when their next minute checkpoint observes the cap. `GET /api/admin/voice-budget` returns usage only when sent `Authorization: Bearer <VOICE_BUDGET_ADMIN_SECRET>`.
 
 #### Configure Cloudflare voice
 1. Create a RealtimeKit application and an audio-only preset. Disable video, screen sharing, and recording in the preset; the game UI does not expose those features.
@@ -139,6 +139,7 @@ Server limits are four room participants in voice, five join attempts per connec
    - `REALTIMEKIT_VOICE_PRESET`
    - `VOICE_BUDGET_ADMIN_SECRET` (use a long, unique random value)
    - Optional `VOICE_MONTHLY_MINUTE_LIMIT` (defaults to `8000`) and `VOICE_ENABLED` (`false` to disable)
+   For production, run `npx wrangler secret put <NAME>` once for each required value, entering the value at the prompt. Add optional values the same way if you want to override the defaults.
 3. Keep all credentials server-side. Never add `.dev.vars` or real values to Git.
 4. Verify locally with two browser/device sessions: join voice, grant microphone permission, mute/unmute, leave, refresh/reconnect, disable voice as host, and inspect usage with the admin endpoint. Production testing requires a deployed RealtimeKit app and actual Cloudflare credentials; automated tests mock the provider.
 

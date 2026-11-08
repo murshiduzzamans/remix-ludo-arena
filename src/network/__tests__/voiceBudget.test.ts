@@ -71,11 +71,22 @@ describe('VoiceBudget', () => {
     expect(blocked.body).toMatchObject({ ok: false, code: 'VOICE_BUDGET_REACHED' });
   });
 
+  it('does not charge a reserved session that never became active', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-03T00:00:00.000Z'));
+    const { request } = setupBudget();
+    await request('/reserve', 20, 'room:failed-join');
+
+    const released = await request('/leave', 20, 'room:failed-join');
+    expect(released.body).toMatchObject({ ok: true, snapshot: { usedMinutes: 0, activeMinutes: 0, totalMinutes: 0 } });
+  });
+
   it('resets monthly usage on the UTC month boundary without charging pre-boundary time', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-31T23:59:30.000Z'));
     const { request } = setupBudget();
     await request('/reserve', 20, 'room:seat');
+    await request('/checkpoint', 20, 'room:seat');
 
     vi.setSystemTime(new Date('2026-02-01T00:10:00.000Z'));
     const snapshot = await request('/snapshot', 20);
@@ -85,6 +96,8 @@ describe('VoiceBudget', () => {
       activeMinutes: 1,
       totalMinutes: 1,
     });
+    const left = await request('/leave', 20, 'room:seat');
+    expect(left.body).toMatchObject({ snapshot: { month: '2026-02', usedMinutes: 1 } });
   });
 
   it('rejects invalid limits and malformed session requests', async () => {
