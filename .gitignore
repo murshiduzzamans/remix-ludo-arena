@@ -12,3 +12,4 @@ dev-dist/
 .env*
 !.env.example
 .dev.vars*
+backups/

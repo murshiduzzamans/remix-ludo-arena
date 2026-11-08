@@ -10,6 +10,13 @@ class_name = "LudoRoom"
 name = "VOICE_BUDGET"
 class_name = "VoiceBudget"
 
+# D1 database binding will be added after manual database creation
+# Uncomment and fill in database_id after running: wrangler d1 create ludo-arena-prod-db
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "ludo-arena-prod-db"
+# database_id = "YOUR_PROD_DATABASE_ID"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["LudoRoom"]
@@ -46,4 +53,40 @@ ip = "0.0.0.0"
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*"]
+run_worker_first = ["/api/*", "/auth/*"]
+
+# Staging environment for testing before production
+[env.staging]
+name = "ludo-arena-multiplayer-staging"
+
+[[env.staging.durable_objects.bindings]]
+name = "LUDO_ROOMS"
+class_name = "LudoRoom"
+
+[[env.staging.durable_objects.bindings]]
+name = "VOICE_BUDGET"
+class_name = "VoiceBudget"
+
+# Staging D1 database - fill in after: wrangler d1 create ludo-arena-staging-db
+# [[env.staging.d1_databases]]
+# binding = "DB"
+# database_name = "ludo-arena-staging-db"
+# database_id = "YOUR_STAGING_DATABASE_ID"
+
+# Production environment
+[env.production]
+name = "ludo-arena-multiplayer-production"
+
+[[env.production.durable_objects.bindings]]
+name = "LUDO_ROOMS"
+class_name = "LudoRoom"
+
+[[env.production.durable_objects.bindings]]
+name = "VOICE_BUDGET"
+class_name = "VoiceBudget"
+
+# Production D1 database - fill in after: wrangler d1 create ludo-arena-prod-db
+# [[env.production.d1_databases]]
+# binding = "DB"
+# database_name = "ludo-arena-prod-db"
+# database_id = "YOUR_PROD_DATABASE_ID"

@@ -5,12 +5,15 @@ import { advanceIfStuck, applyMove, createDiceSource, createInitialGameState, fo
 import { DEFAULT_RULES } from '../src/engine/gameEngine';
 import type { GameMode, GameRules, GameState, PlayerColor } from '../src/engine/types';
 import type { ChatMessage, ChatReaction, OnlineTokenMove, RoomParticipant, RoomSnapshot, ServerMessage } from '../src/network/protocol';
+import { handleGuestAuth, handleGoogleAuthStart, handleGoogleAuthCallback, handleLogout, handleGetMe, handleUpdateMe, handleDeleteMe, handleGetPublicProfile, handleGetLeaderboard } from './routes/authRoutes';
+import type { D1Database } from '@cloudflare/workers-types';
 
 export { VoiceBudget } from './voiceBudget';
 
 interface Env {
   LUDO_ROOMS: DurableObjectNamespaceLike;
   VOICE_BUDGET?: DurableObjectNamespaceLike;
+  DB?: D1Database;
   ASSETS?: { fetch(request: Request): Promise<Response> };
   ALLOWED_ORIGINS?: string;
   CHAT_ENABLED?: string;
@@ -21,6 +24,10 @@ interface Env {
   REALTIMEKIT_VOICE_PRESET?: string;
   VOICE_MONTHLY_MINUTE_LIMIT?: string;
   VOICE_BUDGET_ADMIN_SECRET?: string;
+  ACCOUNTS_ENABLED?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  SESSION_SECRET?: string;
   CREATE_ROOM_LIMITER?: { limit(input: { key: string }): Promise<{ success: boolean }> };
   JOIN_ROOM_LIMITER?: { limit(input: { key: string }): Promise<{ success: boolean }> };
 }
@@ -53,6 +60,7 @@ declare const WebSocketPair: { new (): { 0: WebSocket; 1: DurableWebSocket } };
 
 interface StoredParticipant extends RoomParticipant {
   token: string;
+  userId?: string;
 }
 
 interface StoredVoiceParticipant {
@@ -337,6 +345,37 @@ export default {
     });
 
     const url = new URL(request.url);
+
+    // Auth routes
+    if (url.pathname === '/api/auth/guest' && request.method === 'POST') {
+      return handleGuestAuth(request, env);
+    }
+    if (url.pathname === '/api/auth/google/start' && request.method === 'GET') {
+      return handleGoogleAuthStart(request, env);
+    }
+    if (url.pathname === '/api/auth/google/callback' && request.method === 'GET') {
+      return handleGoogleAuthCallback(request, env);
+    }
+    if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
+      return handleLogout(request, env);
+    }
+    if (url.pathname === '/api/me' && request.method === 'GET') {
+      return handleGetMe(request, env);
+    }
+    if (url.pathname === '/api/me' && request.method === 'PATCH') {
+      return handleUpdateMe(request, env);
+    }
+    if (url.pathname === '/api/me' && request.method === 'DELETE') {
+      return handleDeleteMe(request, env);
+    }
+    if (url.pathname === '/api/leaderboard' && request.method === 'GET') {
+      return handleGetLeaderboard(request, env);
+    }
+    const profileMatch = url.pathname.match(/^\/api\/profile\/([^/]+)$/);
+    if (profileMatch && request.method === 'GET') {
+      return handleGetPublicProfile(decodeURIComponent(profileMatch[1]), env);
+    }
+
     if (url.pathname === '/api/admin/voice-budget') {
       if (request.method !== 'GET') return json({ error: 'Not found.' }, 404, corsOrigin);
       if (!env.VOICE_BUDGET || !env.VOICE_BUDGET_ADMIN_SECRET) {

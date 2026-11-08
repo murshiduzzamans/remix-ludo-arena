@@ -7,13 +7,19 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "dev:worker": "wrangler dev --config wrangler.toml --port 8787",
     "deploy:worker": "npm run build && wrangler deploy --config wrangler.toml",
+    "deploy:staging": "npm run build && wrangler deploy --config wrangler.toml --env staging",
+    "deploy:production": "npm run build && wrangler deploy --config wrangler.toml --env production",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "db:migrate:staging": "bash ./scripts/migrate-staging.sh",
+    "db:migrate:production": "bash ./scripts/migrate-production.sh",
+    "db:backup:staging": "bash ./scripts/backup-d1.sh staging",
+    "db:backup:production": "bash ./scripts/backup-d1.sh production"
   },
   "dependencies": {
     "@cloudflare/realtimekit": "^2.0.4",
