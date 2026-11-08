@@ -10,12 +10,10 @@ class_name = "LudoRoom"
 name = "VOICE_BUDGET"
 class_name = "VoiceBudget"
 
-# D1 database binding will be added after manual database creation
-# Uncomment and fill in database_id after running: wrangler d1 create ludo-arena-prod-db
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "ludo-arena-prod-db"
-# database_id = "YOUR_PROD_DATABASE_ID"
+[[d1_databases]]
+binding = "DB"
+database_name = "ludo-arena-prod-db"
+database_id = "8648a531-4c3a-4b4e-b6d1-44cce651b94b"
 
 [[migrations]]
 tag = "v1"
@@ -59,6 +57,11 @@ run_worker_first = ["/api/*", "/auth/*"]
 [env.staging]
 name = "ludo-arena-multiplayer-staging"
 
+[env.staging.vars]
+ACCOUNTS_ENABLED = "true"
+CHAT_ENABLED = "true"
+VOICE_ENABLED = "false"
+
 [[env.staging.durable_objects.bindings]]
 name = "LUDO_ROOMS"
 class_name = "LudoRoom"
@@ -67,16 +70,20 @@ class_name = "LudoRoom"
 name = "VOICE_BUDGET"
 class_name = "VoiceBudget"
 
-# Staging D1 database - fill in after: wrangler d1 create ludo-arena-staging-db
-# [[env.staging.d1_databases]]
-# binding = "DB"
-# database_name = "ludo-arena-staging-db"
-# database_id = "YOUR_STAGING_DATABASE_ID"
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "ludo-arena-staging-db"
+database_id = "340e940d-747c-469b-8e49-579956d99da9"
 
 # Production environment
 [env.production]
 name = "ludo-arena-multiplayer-production"
 
+[env.production.vars]
+ACCOUNTS_ENABLED = "true"
+CHAT_ENABLED = "true"
+VOICE_ENABLED = "false"
+
 [[env.production.durable_objects.bindings]]
 name = "LUDO_ROOMS"
 class_name = "LudoRoom"
@@ -85,8 +92,7 @@ class_name = "LudoRoom"
 name = "VOICE_BUDGET"
 class_name = "VoiceBudget"
 
-# Production D1 database - fill in after: wrangler d1 create ludo-arena-prod-db
-# [[env.production.d1_databases]]
-# binding = "DB"
-# database_name = "ludo-arena-prod-db"
-# database_id = "YOUR_PROD_DATABASE_ID"
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ludo-arena-prod-db"
+database_id = "8648a531-4c3a-4b4e-b6d1-44cce651b94b"
