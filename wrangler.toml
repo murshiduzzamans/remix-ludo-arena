@@ -4,6 +4,7 @@ compatibility_date = "2026-11-06"
 
 [vars]
 ACCOUNTS_ENABLED = "true"
+GITHUB_CLIENT_ID = "Ov23liEkS9gSpeR8xixQ"
 
 [[durable_objects.bindings]]
 name = "LUDO_ROOMS"
