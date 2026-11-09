@@ -13,6 +13,7 @@ dev-dist/
 !.env.example
 .dev.vars*
 backups/
+backup-*.sql
 # Claude Code local settings
 .claude/
 .claude/settings.local.json
