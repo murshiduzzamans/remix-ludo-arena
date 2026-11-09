@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { Headphones } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { COLOR_THEMES } from '../../engine/constants';
 import { Player, PlayerColor } from '../../engine/types';
@@ -23,6 +24,7 @@ interface CornerPlayerPodProps {
   teamLabel?: string;
   customAvatarUrl?: string | null;
   customAvatarIcon?: string;
+  inVoice?: boolean;
 }
 
 /**
@@ -92,6 +94,7 @@ export const CornerPlayerPod: React.FC<CornerPlayerPodProps> = ({
   teamLabel,
   customAvatarUrl,
   customAvatarIcon,
+  inVoice = false,
 }) => {
   const theme = COLOR_THEMES[player.color];
   const avatar = AVATAR_DATA[player.color];
@@ -227,6 +230,14 @@ export const CornerPlayerPod: React.FC<CornerPlayerPodProps> = ({
         className="absolute bottom-0 inset-x-0 h-1.5 pointer-events-none"
         style={{ backgroundColor: theme.primary }}
       />
+      {inVoice && (
+        <span
+          className="pointer-events-none absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full border border-[#072468] bg-emerald-400 text-slate-950 shadow"
+          title="In voice chat"
+        >
+          <Headphones className="h-2.5 w-2.5" aria-hidden="true" />
+        </span>
+      )}
     </div>
   );
 

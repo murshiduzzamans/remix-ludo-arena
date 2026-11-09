@@ -503,6 +503,56 @@ describe('online private rooms', () => {
     }
   });
 
+  it('runs a 1v1 duel room with two seats on opposite corners and no bots', async () => {
+    const namespace = new MemoryNamespace();
+    const env = { LUDO_ROOMS: namespace as never };
+    const created = await worker.fetch(new Request('https://game.test/api/rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'head_to_head_1v1', playerName: 'Host', rules }),
+    }), env);
+    expect(created.status).toBe(201);
+    const host = await created.json() as { roomCode: string; participantId: string; room: { maxPlayers: number; mode: string } };
+    expect(host.room).toMatchObject({ mode: 'head_to_head_1v1', maxPlayers: 2 });
+
+    const joinAs = (playerName: string) => worker.fetch(new Request(`https://game.test/api/rooms/${host.roomCode}/join`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerName }),
+    }), env);
+    const joined = await joinAs('Rival');
+    expect(joined.status).toBe(201);
+    const rival = await joined.json() as { participantId: string; room: { participants: Array<{ id: string; color: string }> } };
+    expect(rival.room.participants.find((participant) => participant.id === rival.participantId)?.color).toBe('yellow');
+
+    const third = await joinAs('Late');
+    expect(third.status).toBe(409);
+
+    const entry = namespace.rooms.get(host.roomCode)!;
+    const stored = entry.state.storage.values.get('room') as {
+      participants: Array<{ id: string; isConnected: boolean; isReady: boolean }>;
+      gameState: ReturnType<typeof createInitialGameState> | null;
+    };
+    stored.participants = stored.participants.map((player) => ({ ...player, isConnected: true, isReady: true }));
+    entry.state.storage.values.set('room', stored);
+    entry.room = new LudoRoom(entry.state as never, { LUDO_ROOMS: namespace as never });
+    const hostSocket = new FakeSocket();
+    hostSocket.serializeAttachment({ participantId: host.participantId });
+    entry.state.acceptWebSocket(hostSocket);
+
+    await entry.room.webSocketMessage(hostSocket as never, JSON.stringify({ type: 'CLIENT_START_MATCH' }));
+    const started = entry.state.storage.values.get('room') as typeof stored & { isMatchInProgress: boolean };
+    expect(started.isMatchInProgress).toBe(true);
+    const game = started.gameState!;
+    expect(game.mode).toBe('head_to_head_1v1');
+    const active = game.players.filter((player) => player.isActiveInMatch !== false);
+    expect(active.map((player) => player.color).sort()).toEqual(['red', 'yellow']);
+    expect(active.every((player) => !player.isBot)).toBe(true);
+    expect(active.find((player) => player.color === 'red')?.name).toBe('Host');
+    expect(active.find((player) => player.color === 'yellow')?.name).toBe('Rival');
+    const inactive = game.players.filter((player) => player.isActiveInMatch === false);
+    expect(inactive).toHaveLength(2);
+    expect(inactive.every((player) => player.tokens.length === 0)).toBe(true);
+  });
+
   it('requires the invited opposite-team player to accept a lobby team switch and supports decline', async () => {
     const namespace = new MemoryNamespace();
     const env = { LUDO_ROOMS: namespace as never };

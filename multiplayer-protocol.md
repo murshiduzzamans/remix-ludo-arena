@@ -49,6 +49,14 @@ type ClientMessage =
 #### HTTP `POST /api/rooms`
 Creates a room. JSON body: `{ "mode": "classic_4p", "playerName": "Alex", "rules": { ... } }`.
 
+Supported `mode` values:
+
+| Mode | Seats | Empty seats at start |
+|---|---|---|
+| `head_to_head_1v1` | 2 (host Red, guest Yellow, opposite corners) | Green and Blue stay inactive; never bots |
+| `classic_4p` | 4 | Filled by server bots |
+| `team_2v2` | 4 (Red + Yellow vs Green + Blue) | Filled by server bots |
+
 #### HTTP `POST /api/rooms/<code>/join`
 Joins a room. JSON body: `{ "playerName": "Jordan", "token": "<saved token, when reconnecting>" }`.
 

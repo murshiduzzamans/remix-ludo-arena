@@ -6,9 +6,13 @@ const API_URL = (
   (import.meta.env.PROD && typeof window !== 'undefined' ? window.location.origin : '')
 ).replace(/\/$/, '');
 
+export type OnlineRoomMode = 'head_to_head_1v1' | 'classic_4p' | 'team_2v2';
+
 export interface CreateRoomOptions {
-  mode: 'classic_4p' | 'team_2v2';
+  mode: OnlineRoomMode;
   playerName: string;
+  /** Emoji avatar shown to the other players. */
+  avatar?: string;
   rules: GameRules;
 }
 
@@ -84,10 +88,10 @@ export class OnlineRoomConnection {
     return connection;
   }
 
-  static async join(roomCodeInput: string, playerName: string): Promise<OnlineRoomConnection> {
+  static async join(roomCodeInput: string, playerName: string, avatar?: string): Promise<OnlineRoomConnection> {
     const roomCode = roomCodeInput.trim().toUpperCase().replace(/\s+/g, '');
     if (!roomCode) throw new Error('Enter a room code or open your friend’s invite link.');
-    return this.joinWithToken(roomCode, playerName, this.getSavedToken(roomCode) ?? undefined);
+    return this.joinWithToken(roomCode, playerName, this.getSavedToken(roomCode) ?? undefined, avatar);
   }
 
   static async reconnect(roomCodeInput: string, playerName: string): Promise<OnlineRoomConnection | null> {
@@ -102,10 +106,10 @@ export class OnlineRoomConnection {
     try { return window.localStorage.getItem(this.tokenKey(roomCode)); } catch { return null; }
   }
 
-  private static async joinWithToken(roomCode: string, playerName: string, token?: string): Promise<OnlineRoomConnection> {
+  private static async joinWithToken(roomCode: string, playerName: string, token?: string, avatar?: string): Promise<OnlineRoomConnection> {
     const credentials = await this.request(`/api/rooms/${encodeURIComponent(roomCode)}/join`, {
       method: 'POST',
-      body: JSON.stringify({ playerName, token }),
+      body: JSON.stringify({ playerName, token, ...(avatar ? { avatar } : {}) }),
     });
     try { window.localStorage.setItem(this.tokenKey(credentials.roomCode), credentials.token); } catch { /* The live connection still works for this tab. */ }
     const connection = new OnlineRoomConnection(credentials);
@@ -251,7 +255,9 @@ export class OnlineRoomConnection {
     } else if (message.type === 'voice_token') {
       this.emit({ type: 'voice_token', authToken: message.authToken });
     } else if (message.type === 'voice_status') {
+      this.roomSnapshot = { ...this.roomSnapshot, seatsInVoice: message.seatsInVoice };
       this.emit({ type: 'voice_status', seatsInVoice: message.seatsInVoice });
+      this.emit({ type: 'room', room: this.roomSnapshot });
     } else if (message.type === 'voice_budget_warning') {
       this.emit({ type: 'voice_budget_warning', ...message.payload });
     } else if (message.type === 'voice_session_expired') {
@@ -360,6 +366,7 @@ export class OnlineRoomConnection {
   }
 
   close(): void {
+    if (this.manuallyClosed) return;
     this.send('CLIENT_LEAVE_ROOM');
     this.manuallyClosed = true;
     this.stopHeartbeat();

@@ -4,6 +4,7 @@ import { COLOR_ORDER, COLOR_TEAMS } from '../src/engine/constants';
 import { advanceIfStuck, applyMove, createDiceSource, createInitialGameState, forfeitTimedOutTurn, getFairDiceRoll, rollDice } from '../src/engine/gameEngine';
 import { DEFAULT_RULES } from '../src/engine/gameEngine';
 import type { GameMode, GameRules, GameState, PlayerColor } from '../src/engine/types';
+import { isAvatarEmoji } from '../src/shared/avatars';
 import type { ChatMessage, ChatReaction, OnlineTokenMove, RoomParticipant, RoomSnapshot, ServerMessage } from '../src/network/protocol';
 import {
   handleGuestAuth,
@@ -120,10 +121,23 @@ class VoiceJoinError extends Error {
   }
 }
 
+type RoomMode = 'classic_4p' | 'team_2v2' | 'head_to_head_1v1';
+
+const ROOM_MODES: readonly RoomMode[] = ['classic_4p', 'team_2v2', 'head_to_head_1v1'];
+
+function isRoomMode(value: unknown): value is RoomMode {
+  return typeof value === 'string' && (ROOM_MODES as readonly string[]).includes(value);
+}
+
+/** Seats a newly joining guest takes, in priority order. 1v1 places the rival on the opposite corner. */
+function seatOrderForMode(mode: RoomMode): readonly PlayerColor[] {
+  return mode === 'head_to_head_1v1' ? ['red', 'yellow'] : COLOR_ORDER;
+}
+
 interface StoredRoom {
   code: string;
   hostId: string;
-  mode: 'classic_4p' | 'team_2v2';
+  mode: RoomMode;
   rules: GameRules;
   participants: StoredParticipant[];
   maxPlayers: number;
@@ -335,11 +349,14 @@ function createRoomGame(room: StoredRoom): GameState {
     customRules: room.rules,
   });
   state.players = state.players.map((player) => {
+    // Seats outside a 1v1 duel stay empty; they must never be filled by server bots.
+    if (player.isActiveInMatch === false) return player;
     const human = room.participants.find((joined) => joined.color === player.color);
     return {
       ...player,
       id: human?.id ?? `bot-${player.color}`,
       name: human?.name ?? `Bot ${player.color.toUpperCase()}`,
+      avatarSeed: human?.avatar ?? player.avatarSeed,
       isBot: !human,
       botPersonality: human ? undefined : 'balanced',
       teamId: room.mode === 'team_2v2' ? (human?.teamId ?? COLOR_TEAMS[player.color]) : undefined,
@@ -454,7 +471,7 @@ export default {
       try {
         const body = await readJson(request);
         if (!validName(body.playerName)) return json({ error: 'Enter a name up to 24 characters.' }, 400, corsOrigin);
-        if (body.mode !== 'classic_4p' && body.mode !== 'team_2v2') {
+        if (!isRoomMode(body.mode)) {
           return json({ error: 'Choose a supported room mode.' }, 400, corsOrigin);
         }
 
@@ -464,7 +481,7 @@ export default {
           const response = await room.fetch(new Request('https://room.internal/create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code, mode: body.mode, playerName: body.playerName.trim(), rules: normalizeRules(body.rules) }),
+            body: JSON.stringify({ code, mode: body.mode, playerName: body.playerName.trim(), avatar: isAvatarEmoji(body.avatar) ? body.avatar : undefined, rules: normalizeRules(body.rules) }),
           }));
           if (response.status !== 409) return json(await response.json(), response.status, corsOrigin);
         }
@@ -490,7 +507,7 @@ export default {
         const joinResponse = await room.fetch(new Request('https://room.internal/join', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerName: body.playerName.trim(), token: body.token }),
+          body: JSON.stringify({ playerName: body.playerName.trim(), token: body.token, avatar: isAvatarEmoji(body.avatar) ? body.avatar : undefined }),
         }));
         return json(await joinResponse.json(), joinResponse.status, corsOrigin);
       } catch (error) {
@@ -1085,17 +1102,20 @@ export class LudoRoom {
     if (url.pathname === '/create' && request.method === 'POST') {
       const body = await readJson(request);
       if (await this.loadRoom()) return json({ error: 'Code collision.' }, 409);
+      if (!isRoomMode(body.mode)) return json({ error: 'Choose a supported room mode.' }, 400);
+      const mode = body.mode;
       const token = randomToken();
       const host: StoredParticipant = {
         id: crypto.randomUUID(), name: String(body.playerName), color: 'red', isHost: true,
         isReady: true, isBot: false, pingMs: 0, isConnected: false, token,
+        ...(isAvatarEmoji(body.avatar) ? { avatar: body.avatar } : {}),
       };
       this.room = {
-        code: String(body.code), hostId: host.id, mode: body.mode as StoredRoom['mode'],
-        rules: normalizeRules(body.rules), participants: [host], maxPlayers: 4,
+        code: String(body.code), hostId: host.id, mode,
+        rules: normalizeRules(body.rules), participants: [host], maxPlayers: mode === 'head_to_head_1v1' ? 2 : 4,
         isMatchInProgress: false, gameState: null, activeMoveIds: [], turnDeadline: null, rematchRequests: [], teamSwapRequest: null,
         chatEnabled: true, voiceEnabled: true, voiceParticipants: [], voiceCheckpointAt: null,
-        ...(body.mode === 'team_2v2' ? { participants: [{ ...host, teamId: COLOR_TEAMS[host.color] }] } : {}),
+        ...(mode === 'team_2v2' ? { participants: [{ ...host, teamId: COLOR_TEAMS[host.color] }] } : {}),
       };
       await this.saveRoom();
       return json({ roomCode: this.room.code, token, participantId: host.id, room: roomSnapshot(this.room, this.env) }, 201);
@@ -1110,6 +1130,7 @@ export class LudoRoom {
         const returning = room.participants.find((participant) => participant.token === body.token);
         if (returning) {
           returning.name = String(body.playerName);
+          if (isAvatarEmoji(body.avatar)) returning.avatar = body.avatar;
           returning.isConnected = false;
           await this.saveRoom();
           return json({ roomCode: room.code, participantId: returning.id, token: returning.token, room: roomSnapshot(room, this.env) });
@@ -1117,11 +1138,12 @@ export class LudoRoom {
       }
       if (room.isMatchInProgress) return json({ error: 'This match has already started. Use the browser that joined before the match began to reconnect.' }, 409);
       if (room.participants.length >= room.maxPlayers) return json({ error: 'This room is full.' }, 409);
-      const color = COLOR_ORDER.find((candidate) => !room.participants.some((participant) => participant.color === candidate));
+      const color = seatOrderForMode(room.mode).find((candidate) => !room.participants.some((participant) => participant.color === candidate));
       if (!color) return json({ error: 'This room is full.' }, 409);
       const participant: StoredParticipant = {
         id: crypto.randomUUID(), name: String(body.playerName), color, isHost: false,
         isReady: false, isBot: false, pingMs: 0, isConnected: false, token: randomToken(),
+        ...(isAvatarEmoji(body.avatar) ? { avatar: body.avatar } : {}),
       };
       if (room.mode === 'team_2v2') participant.teamId = COLOR_TEAMS[color];
       room.participants.push(participant);

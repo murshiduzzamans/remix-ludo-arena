@@ -80,3 +80,80 @@ describe('RoomLobbyScreen team switching', () => {
     reconnect.mockRestore();
   });
 });
+
+
+
+describe('RoomLobbyScreen 1v1 duel', () => {
+  function createDuelRoom(withRival: boolean): RoomSnapshot {
+    return {
+      code: 'LUDO-DUEL22',
+      hostId: 'host-id',
+      mode: 'head_to_head_1v1',
+      rules: DEFAULT_RULES,
+      participants: [
+        { id: 'host-id', name: 'Host', color: 'red', isHost: true, isReady: true, isBot: false, pingMs: 0, isConnected: true },
+        ...(withRival ? [{ id: 'rival-id', name: 'Rival', color: 'yellow' as const, isHost: false, isReady: false, isBot: false, pingMs: 0, isConnected: true }] : []),
+      ],
+      maxPlayers: 2,
+      isMatchInProgress: false,
+      rematchRequests: [],
+      teamSwapRequest: null,
+    };
+  }
+
+  it('offers 1v1 Duel as a room mode and creates the room with it', async () => {
+    const create = vi.spyOn(OnlineRoomConnectionClass, 'create').mockRejectedValue(new Error('stop'));
+    const configured = vi.spyOn(OnlineRoomConnectionClass, 'configured', 'get').mockReturnValue(true);
+    render(<RoomLobbyScreen onStartOnlineMatch={vi.fn()} onBack={vi.fn()} rules={DEFAULT_RULES} />);
+
+    const duel = screen.getByRole('radio', { name: /1v1 Duel/i });
+    fireEvent.click(duel);
+    expect(duel).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(/You play Red, your friend plays Yellow/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Room/i }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ mode: 'head_to_head_1v1' })));
+    create.mockRestore();
+    configured.mockRestore();
+  });
+
+  it('shows a head-to-head layout with an open opponent seat and no bot wording', () => {
+    const connection = createConnection(createDuelRoom(false), 'host-id');
+    render(<RoomLobbyScreen onStartOnlineMatch={vi.fn()} onBack={vi.fn()} rules={DEFAULT_RULES} existingConnection={connection} />);
+
+    expect(screen.getByText('Players (1/2)')).toBeInTheDocument();
+    expect(screen.getByText('1V1 DUEL')).toBeInTheDocument();
+    expect(screen.getByLabelText('Open opponent seat')).toBeInTheDocument();
+    expect(screen.queryByText(/Server bot/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Start Match/i })).toBeDisabled();
+  });
+
+  it('waits for the joined rival to get ready before the host can start', () => {
+    const connection = createConnection(createDuelRoom(true), 'host-id');
+    render(<RoomLobbyScreen onStartOnlineMatch={vi.fn()} onBack={vi.fn()} rules={DEFAULT_RULES} existingConnection={connection} />);
+
+    expect(screen.getByLabelText(/Yellow seat: Rival/i)).toBeInTheDocument();
+    expect(screen.getByText('Waiting for Rival to get ready.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Start Match/i })).toBeDisabled();
+  });
+
+  it('edits player name inline via icon button and passes avatar emoji when joining', async () => {
+    const join = vi.spyOn(OnlineRoomConnectionClass, 'join').mockRejectedValue(new Error('stop'));
+    const configured = vi.spyOn(OnlineRoomConnectionClass, 'configured', 'get').mockReturnValue(true);
+    render(<RoomLobbyScreen onStartOnlineMatch={vi.fn()} onBack={vi.fn()} rules={DEFAULT_RULES} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit name' }));
+    const nameInput = screen.getByRole('textbox', { name: 'Your name' });
+    fireEvent.change(nameInput, { target: { value: 'Capt. Samm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    expect(screen.getByText('Capt. Samm')).toBeInTheDocument();
+
+    const codeInput = screen.getByPlaceholderText('LUDO-ABC234');
+    fireEvent.change(codeInput, { target: { value: 'https://ludo.example/?room=ludo-xyz789' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Join room' }));
+
+    await waitFor(() => expect(join).toHaveBeenCalledWith('LUDO-XYZ789', 'Capt. Samm', expect.any(String)));
+    join.mockRestore();
+    configured.mockRestore();
+  });
+});

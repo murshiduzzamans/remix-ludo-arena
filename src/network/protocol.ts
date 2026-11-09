@@ -47,6 +47,8 @@ export interface RoomParticipant {
   isReady: boolean;
   isBot: boolean;
   teamId?: TeamId;
+  /** Emoji avatar from the shared avatar list; absent for players who have not picked one. */
+  avatar?: string;
   pingMs: number;
   isConnected?: boolean;
 }

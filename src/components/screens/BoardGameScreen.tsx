@@ -25,6 +25,7 @@ import {
   loadSettings,
   recordMatchOutcomeResilient,
 } from '../../storage/profileStore';
+import { isAvatarEmoji } from '../../shared/avatars';
 import { useGameTimer } from '../../hooks/useGameTimer';
 import type { OnlineRoomConnection, RoomEvent } from '../../network/onlineClient';
 import { AnimatingCaptureInfo, AnimatingTokenInfo, LudoBoard } from '../board/LudoBoard';
@@ -40,6 +41,7 @@ interface BoardGameScreenProps {
   onlineSession?: OnlineRoomConnection;
   onExit: () => void;
   onBackToRoom?: () => void;
+  externalSocialDock?: boolean;
 }
 
 interface CornerLayout {
@@ -99,6 +101,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
   onlineSession,
   onExit,
   onBackToRoom,
+  externalSocialDock = false,
 }) => {
   const [gameState, setGameState] = useState<GameState>(() =>
     onlineSession?.currentGameState ?? createLocalGame(initialMode, humanColor, botPersonalities, rules)
@@ -618,14 +621,21 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         isLocalPlayer={isLocalUserSeat}
         teamLabel={gameState.isTeamMode && player.teamId ? (player.teamId === 'team_A' ? 'Team A' : 'Team B') : undefined}
         customAvatarUrl={isLocalUserSeat ? profile.avatarUrl : undefined}
-        customAvatarIcon={isLocalUserSeat ? getProfileEmoji(profile) : undefined}
+        customAvatarIcon={
+          isLocalUserSeat
+            ? getProfileEmoji(profile)
+            : onlineSession && !player.isBot && isAvatarEmoji(player.avatarSeed)
+              ? player.avatarSeed
+              : undefined
+        }
+        inVoice={Boolean(roomSnapshot?.seatsInVoice?.includes(color))}
       />
     );
   };
 
   return (
     <div
-      className="w-full min-h-[100dvh] flex flex-col justify-center gap-1 py-2 px-2 select-none"
+      className={`w-full min-h-[100dvh] flex flex-col justify-center gap-1 pt-2 px-2 select-none ${onlineSession && externalSocialDock ? 'pb-16 md:pb-2' : 'pb-2'}`}
       style={{
         backgroundColor: '#092569',
         backgroundImage: `
@@ -736,7 +746,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         {renderCornerPod(layout.bottomRight, 'bottom-right')}
       </div>
 
-      {onlineSession && roomSnapshot && (
+      {onlineSession && roomSnapshot && !externalSocialDock && (
         <OnlineChatDock connection={onlineSession} room={roomSnapshot} localColor={onlineSession.localColor} />
       )}
 

@@ -8,9 +8,11 @@ import { sound } from './audio/soundEffects';
 import { ActiveScreen, TopNavBar } from './components/navigation/TopNavBar';
 import { OfflineIndicator } from './components/pwa/PWAInstallBanner';
 import { LobbyScreen } from './components/screens/LobbyScreen';
+import { OnlineChatDock } from './components/social/OnlineChatDock';
 import { DEFAULT_RULES } from './engine/gameEngine';
 import { BotPersonality, GameMode, GameRules, PlayerColor } from './engine/types';
 import { OnlineRoomConnection, roomCodeFromUrl } from './network/onlineClient';
+import type { RoomSnapshot } from './network/protocol';
 import { loadSettings } from './storage/profileStore';
 
 // Code-split screens to optimize initial load and isolate large assets
@@ -43,6 +45,17 @@ function ScreenLoader() {
       <span className="text-xs font-bold text-sky-200">Loading arena…</span>
     </div>
   );
+}
+
+function OnlineSocialOverlay({ session }: { session: OnlineRoomConnection }) {
+  const [room, setRoom] = useState<RoomSnapshot>(() => session.currentRoom);
+  useEffect(() => {
+    setRoom(session.currentRoom);
+    return session.subscribe((event) => {
+      if (event.type === 'room') setRoom(event.room);
+    });
+  }, [session]);
+  return <OnlineChatDock connection={session} room={room} localColor={session.localColor} floating />;
 }
 
 export default function App() {
@@ -114,6 +127,8 @@ export default function App() {
               initialRoomCode={inviteCode}
               rules={activeRules}
               existingConnection={onlineSession}
+              externalSocialDock
+              onSessionChange={setOnlineSession}
               onStartOnlineMatch={(session) => {
                 setOnlineSession(session);
                 setActiveMode(session.currentRoom.mode);
@@ -122,6 +137,7 @@ export default function App() {
                 setCurrentScreen('board_game');
               }}
               onBack={() => {
+                onlineSession?.close();
                 window.history.replaceState({}, '', window.location.pathname);
                 setOnlineSession(null);
                 setCurrentScreen('lobby');
@@ -143,6 +159,7 @@ export default function App() {
               botPersonalities={botPersonalities}
               rules={onlineSession?.currentRoom.rules ?? activeRules}
               onlineSession={onlineSession ?? undefined}
+              externalSocialDock={Boolean(onlineSession)}
               onExit={() => {
                 onlineSession?.close();
                 setOnlineSession(null);
@@ -171,6 +188,11 @@ export default function App() {
           )}
         </Suspense>
       </main>
+
+      {/* Persistent online voice & chat dock across friend lobby and match */}
+      {onlineSession && (currentScreen === 'room_lobby' || currentScreen === 'board_game') && (
+        <OnlineSocialOverlay key={onlineSession.roomCode} session={onlineSession} />
+      )}
 
       {/* Offline Status Toast */}
       <OfflineIndicator />

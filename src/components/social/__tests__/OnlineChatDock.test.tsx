@@ -140,4 +140,43 @@ describe('OnlineChatDock', () => {
     expect(connection.leaveVoice).toHaveBeenCalledOnce();
     expect(screen.getByRole('button', { name: 'Join room voice' })).toBeTruthy();
   });
+
+  it('uses a stable single-line input and keeps voice alive when seatsInVoice starts empty', async () => {
+    const { connection, listeners } = createConnection();
+    sdkMocks.init.mockResolvedValue(sdkMocks.meeting);
+    sdkMocks.meeting.join.mockResolvedValue(undefined);
+    sdkMocks.meeting.leave.mockResolvedValue(undefined);
+    sdkMocks.meeting.leave.mockClear();
+
+    const roomWithEmptyVoice = { ...room, seatsInVoice: [] };
+    const { container, rerender } = render(
+      <OnlineChatDock connection={connection} room={roomWithEmptyVoice} localColor="red" floating />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Chat/ }));
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(screen.getByLabelText('Chat message').tagName).toBe('INPUT');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close room chat' }));
+    expect(container.querySelector('#online-chat-panel')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Join room voice' }));
+    act(() => listeners[0]({ type: 'voice_token', authToken: 'token-stable' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mute microphone' })).toBeTruthy());
+    expect(sdkMocks.meeting.leave).not.toHaveBeenCalled();
+
+    act(() => listeners[0]({ type: 'voice_status', seatsInVoice: ['red', 'green'] }));
+    expect(screen.getByLabelText('Players in voice')).toBeTruthy();
+
+    rerender(
+      <OnlineChatDock
+        connection={connection}
+        room={{ ...roomWithEmptyVoice, seatsInVoice: [], voiceEnabled: false }}
+        localColor="red"
+        floating
+      />
+    );
+    await waitFor(() => expect(sdkMocks.meeting.leave).toHaveBeenCalledOnce());
+    expect(screen.getByText('Voice chat was disabled by the host.')).toBeTruthy();
+  });
 });

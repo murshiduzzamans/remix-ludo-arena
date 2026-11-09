@@ -3,13 +3,30 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Headphones, MessageCircle, Mic, MicOff, PhoneOff, Send, Volume2, VolumeX } from 'lucide-react';
+import {
+  AlertCircle,
+  Headphones,
+  Loader2,
+  MessageCircle,
+  MessageSquare,
+  MessageSquareOff,
+  Mic,
+  MicOff,
+  PhoneOff,
+  Radio,
+  Send,
+  Shield,
+  Volume2,
+  VolumeX,
+  X,
+} from 'lucide-react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type RealtimeKitClient from '@cloudflare/realtimekit';
 import type { PlayerColor } from '../../engine/types';
 import type { OnlineRoomConnection, RoomEvent } from '../../network/onlineClient';
 import type { ChatMessage, ChatReaction, RoomSnapshot } from '../../network/protocol';
 import { COLOR_THEMES } from '../../engine/constants';
+import { isAvatarEmoji } from '../../shared/avatars';
 
 const REACTIONS: Array<{ value: ChatReaction; label: string }> = [
   { value: 'thumbs_up', label: '👍' },
@@ -20,10 +37,12 @@ const REACTIONS: Array<{ value: ChatReaction; label: string }> = [
   { value: 'gg', label: 'GG' },
 ];
 
-interface OnlineChatDockProps {
+export interface OnlineChatDockProps {
   connection: OnlineRoomConnection;
   room: RoomSnapshot;
   localColor: PlayerColor;
+  /** Mounts as a persistent floating bottom dock so screen changes never interrupt voice or chat. */
+  floating?: boolean;
 }
 
 function mutedColorsKey(roomCode: string): string {
@@ -42,7 +61,12 @@ function readMutedColors(roomCode: string): Set<PlayerColor> {
   }
 }
 
-export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room, localColor }) => {
+export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({
+  connection,
+  room,
+  localColor,
+  floating = false,
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -55,21 +79,51 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
   const [microphoneEnabled, setMicrophoneEnabled] = useState(false);
   const [activeSpeakerColor, setActiveSpeakerColor] = useState<PlayerColor | null>(null);
   const [voiceError, setVoiceError] = useState('');
+  const [liveVoiceSeats, setLiveVoiceSeats] = useState<PlayerColor[]>(() => room.seatsInVoice ?? []);
+
+  const dockContainerRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
   const realtimeKitRef = useRef<RealtimeKitClient | null>(null);
   const roomParticipantsRef = useRef(room.participants);
   const voiceGenerationRef = useRef(0);
   const voiceStartingRef = useRef(false);
   const voiceRequestedRef = useRef(false);
+  const seenInVoiceSeatsRef = useRef(false);
+  const voiceJoinTimeoutRef = useRef<number | undefined>(undefined);
+  const speakerClearTimerRef = useRef<number | undefined>(undefined);
   const messageListRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const isOpenRef = useRef(false);
+
   const isHost = room.participants.find((participant) => participant.id === connection.participantId)?.isHost ?? false;
   const chatEnabled = room.chatEnabled !== false;
+  const voiceEnabled = room.voiceEnabled !== false;
   const voiceAvailable = room.voiceAvailable !== false;
   const visibleMessages = messages.filter((message) => !mutedColors.has(message.color));
   const characterCount = Array.from(draft).length;
   const isCoolingDown = cooldownUntil > Date.now();
+  const seatsInVoice = liveVoiceSeats;
+
   roomParticipantsRef.current = room.participants;
+
+  const clearVoiceTimers = useCallback(() => {
+    if (voiceJoinTimeoutRef.current !== undefined) {
+      window.clearTimeout(voiceJoinTimeoutRef.current);
+      voiceJoinTimeoutRef.current = undefined;
+    }
+    if (speakerClearTimerRef.current !== undefined) {
+      window.clearTimeout(speakerClearTimerRef.current);
+      speakerClearTimerRef.current = undefined;
+    }
+  }, []);
+
+  useEffect(() => {
+    setMutedColors(readMutedColors(room.code));
+  }, [room.code]);
+
+  useEffect(() => {
+    if (room.seatsInVoice) setLiveVoiceSeats(room.seatsInVoice);
+  }, [room.seatsInVoice]);
 
   const startVoiceClient = useCallback(async (authToken: string) => {
     if (realtimeKitRef.current || voiceStartingRef.current) return;
@@ -85,15 +139,25 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
       }
       realtimeKitRef.current = meeting;
       meeting.participants.on('activeSpeaker', ({ peerId }) => {
-        const speaker = meeting?.participants.joined.get(peerId);
+        if (speakerClearTimerRef.current !== undefined) {
+          window.clearTimeout(speakerClearTimerRef.current);
+        }
+        const speaker = peerId ? meeting?.participants.joined.get(peerId) : undefined;
         const participant = roomParticipantsRef.current.find((entry) => entry.id === speaker?.customParticipantId);
-        setActiveSpeakerColor(participant?.color ?? null);
+        const speakerColor = participant?.color ?? null;
+        setActiveSpeakerColor(speakerColor);
+        if (speakerColor) {
+          speakerClearTimerRef.current = window.setTimeout(() => {
+            setActiveSpeakerColor((current) => (current === speakerColor ? null : current));
+          }, 2600);
+        }
       });
       await meeting.join();
       if (generation !== voiceGenerationRef.current) {
         await meeting.leave();
         return;
       }
+      clearVoiceTimers();
       setMicrophoneEnabled(true);
       setVoiceJoined(true);
       setVoiceStarting(false);
@@ -108,8 +172,10 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
       }
       if (realtimeKitRef.current === meeting) realtimeKitRef.current = null;
       if (generation === voiceGenerationRef.current) {
-        connection.leaveVoice();
+        clearVoiceTimers();
+        connection.leaveVoice?.();
         voiceRequestedRef.current = false;
+        seenInVoiceSeatsRef.current = false;
         setVoiceStarting(false);
         setVoiceJoined(false);
         setMicrophoneEnabled(false);
@@ -118,15 +184,18 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
     } finally {
       if (generation === voiceGenerationRef.current) voiceStartingRef.current = false;
     }
-  }, [connection]);
+  }, [clearVoiceTimers, connection]);
 
   const stopVoiceClient = useCallback(async () => {
+    clearVoiceTimers();
     voiceGenerationRef.current += 1;
     voiceStartingRef.current = false;
     voiceRequestedRef.current = false;
-    connection.leaveVoice();
+    seenInVoiceSeatsRef.current = false;
+    connection.leaveVoice?.();
     const meeting = realtimeKitRef.current;
     realtimeKitRef.current = null;
+    setVoiceStarting(false);
     setVoiceJoined(false);
     setMicrophoneEnabled(false);
     setActiveSpeakerColor(null);
@@ -137,23 +206,35 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
         setVoiceError('Could not close the voice connection cleanly.');
       }
     }
-  }, [connection]);
+  }, [clearVoiceTimers, connection]);
 
   useEffect(() => {
     isOpenRef.current = isOpen;
-    if (isOpen) setUnreadCount(0);
+    if (isOpen) {
+      setUnreadCount(0);
+      window.requestAnimationFrame(() => chatInputRef.current?.focus());
+    }
   }, [isOpen]);
 
+  // Close popover cleanly on Escape or outside click without shifting anything
   useEffect(() => {
-    return () => {
-      voiceGenerationRef.current += 1;
-      voiceStartingRef.current = false;
-      voiceRequestedRef.current = false;
-      const meeting = realtimeKitRef.current;
-      realtimeKitRef.current = null;
-      if (meeting) void meeting.leave().catch(() => console.warn('RealtimeKit leave failed during component cleanup.'));
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsOpen(false);
     };
-  }, []);
+    const onPointerDown = (event: MouseEvent) => {
+      const container = dockContainerRef.current;
+      if (container && event.target instanceof Node && !container.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     return connection.subscribe((event: RoomEvent) => {
@@ -169,7 +250,7 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
         if (event.code === 'CHAT_RATE_LIMITED') {
           const seconds = event.retryAfterSeconds ?? 2;
           setCooldownUntil(Date.now() + seconds * 1000);
-          setChatError(`Slow down and try again in ${seconds} seconds.`);
+          setChatError(`Slow down (${seconds}s).`);
         } else if (event.code === 'CHAT_DISABLED') {
           setChatError('Chat has been turned off by the host.');
         } else {
@@ -177,9 +258,14 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
         }
       } else if (event.type === 'error') {
         setChatError(event.message);
+      } else if (event.type === 'room') {
+        if (event.room.seatsInVoice) setLiveVoiceSeats(event.room.seatsInVoice);
+      } else if (event.type === 'voice_status') {
+        setLiveVoiceSeats(event.seatsInVoice);
       } else if (event.type === 'connection' && !event.connected && voiceRequestedRef.current) {
         voiceGenerationRef.current += 1;
         voiceStartingRef.current = false;
+        seenInVoiceSeatsRef.current = false;
         const meeting = realtimeKitRef.current;
         realtimeKitRef.current = null;
         if (meeting) void meeting.leave().catch(() => console.warn('RealtimeKit leave failed during room reconnect.'));
@@ -191,7 +277,9 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
         setVoiceStarting(true);
         void startVoiceClient(event.authToken);
       } else if (event.type === 'voice_error') {
+        clearVoiceTimers();
         voiceRequestedRef.current = false;
+        seenInVoiceSeatsRef.current = false;
         voiceGenerationRef.current += 1;
         voiceStartingRef.current = false;
         setVoiceStarting(false);
@@ -199,52 +287,55 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
           event.code === 'VOICE_DISABLED' ? 'Voice chat is disabled by the host.' :
             event.code === 'VOICE_BUDGET_REACHED' ? 'Room voice is unavailable for this month.' :
               event.code === 'VOICE_ROOM_FULL' ? 'The voice room is full.' :
-                event.code === 'VOICE_RATE_LIMITED' ? `Please wait ${event.retryAfterSeconds ?? 2} seconds before retrying voice.` :
+                event.code === 'VOICE_RATE_LIMITED' ? `Wait ${event.retryAfterSeconds ?? 2}s before retrying voice.` :
                   event.code === 'VOICE_NOT_ALLOWED' ? 'This seat cannot join voice chat.' :
-                    'Voice is unavailable. Try again in a moment.'
+                    'Voice is unavailable right now.'
         );
       } else if (event.type === 'voice_session_expired') {
         voiceRequestedRef.current = false;
+        seenInVoiceSeatsRef.current = false;
         void stopVoiceClient();
-        setVoiceError('Your voice session reached its time limit. Rejoin to continue.');
+        setVoiceError('Voice session reached its time limit. Tap to rejoin.');
       } else if (event.type === 'voice_budget_warning') {
-        setVoiceError(`Room voice is nearing its monthly usage limit (${event.totalMinutes}/${event.limitMinutes} minutes).`);
+        setVoiceError(`Voice usage warning (${event.totalMinutes}/${event.limitMinutes} min).`);
       }
     });
-  }, [connection, localColor, startVoiceClient, stopVoiceClient]);
+  }, [clearVoiceTimers, connection, localColor, startVoiceClient, stopVoiceClient]);
 
+  // Track when the server confirms our seat in seatsInVoice so we only auto-disconnect on real removal or host disable
   useEffect(() => {
-    if (voiceJoined && room.seatsInVoice && !room.seatsInVoice.includes(localColor)) {
-      const message = room.voiceEnabled === false
-        ? 'Voice chat was disabled by the host.'
-        : 'The room voice session has ended.';
-      void stopVoiceClient();
-      setVoiceError(message);
+    if (seatsInVoice.includes(localColor)) {
+      seenInVoiceSeatsRef.current = true;
     }
-  }, [localColor, room.seatsInVoice, room.voiceEnabled, stopVoiceClient, voiceJoined]);
+    if (!voiceJoined) return;
+    if (!voiceEnabled) {
+      void stopVoiceClient();
+      setVoiceError('Voice chat was disabled by the host.');
+    } else if (seenInVoiceSeatsRef.current && !seatsInVoice.includes(localColor)) {
+      void stopVoiceClient();
+      setVoiceError('The room voice session has ended.');
+    }
+  }, [localColor, seatsInVoice, stopVoiceClient, voiceEnabled, voiceJoined]);
 
   useEffect(() => {
-    const onPageHide = () => {
+    const cleanupActiveVoice = () => {
+      clearVoiceTimers();
+      const hadVoice = voiceRequestedRef.current || realtimeKitRef.current !== null;
       voiceGenerationRef.current += 1;
       voiceStartingRef.current = false;
       voiceRequestedRef.current = false;
-      connection.leaveVoice();
+      seenInVoiceSeatsRef.current = false;
       const meeting = realtimeKitRef.current;
       realtimeKitRef.current = null;
-      if (meeting) void meeting.leave().catch(() => console.warn('RealtimeKit leave failed during page navigation.'));
+      if (meeting) void meeting.leave().catch(() => console.warn('RealtimeKit leave failed during cleanup.'));
+      if (hadVoice) connection.leaveVoice?.();
     };
-    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pagehide', cleanupActiveVoice);
     return () => {
-      window.removeEventListener('pagehide', onPageHide);
-      voiceGenerationRef.current += 1;
-      voiceStartingRef.current = false;
-      voiceRequestedRef.current = false;
-      const meeting = realtimeKitRef.current;
-      realtimeKitRef.current = null;
-      if (meeting) void meeting.leave().catch(() => console.warn('RealtimeKit leave failed during component cleanup.'));
-      connection.leaveVoice();
+      window.removeEventListener('pagehide', cleanupActiveVoice);
+      cleanupActiveVoice();
     };
-  }, [connection]);
+  }, [clearVoiceTimers, connection]);
 
   useEffect(() => {
     if (cooldownUntil <= Date.now()) return;
@@ -289,7 +380,9 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
   };
 
   const joinVoice = async () => {
+    if (voiceStarting || voiceJoined) return;
     voiceRequestedRef.current = true;
+    seenInVoiceSeatsRef.current = false;
     setVoiceError('');
     setVoiceStarting(true);
     let microphoneGranted = false;
@@ -299,12 +392,19 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
       stream.getTracks().forEach((track) => track.stop());
     } catch (error) {
       const name = error instanceof DOMException ? error.name : '';
-      setVoiceError(name === 'NotAllowedError'
-        ? 'Microphone access was denied.'
-        : 'Microphone is unavailable in this browser.');
+      if (name === 'NotAllowedError') {
+        setVoiceError('Microphone access was denied (joining listen-only).');
+      }
     }
+    if (voiceJoinTimeoutRef.current !== undefined) window.clearTimeout(voiceJoinTimeoutRef.current);
+    voiceJoinTimeoutRef.current = window.setTimeout(() => {
+      if (!realtimeKitRef.current && voiceRequestedRef.current) {
+        voiceRequestedRef.current = false;
+        setVoiceStarting(false);
+        setVoiceError('Voice connection timed out. Tap to try again.');
+      }
+    }, 12000);
     connection.joinVoice(microphoneGranted);
-    setVoiceStarting(false);
   };
 
   const toggleMicrophone = async () => {
@@ -329,205 +429,397 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
     });
   };
 
+  const activeSpeakerName = activeSpeakerColor
+    ? room.participants.find((participant) => participant.color === activeSpeakerColor)?.name ?? activeSpeakerColor
+    : null;
+
+  const voiceButtonLabel = voiceStarting
+    ? 'Connecting to room voice'
+    : !voiceEnabled
+      ? 'Voice disabled by host'
+      : voiceAvailable
+        ? 'Join room voice'
+        : 'Voice unavailable';
+
   return (
-    <section className="mx-auto mt-2 w-full max-w-[450px] md:flex md:justify-end" aria-label="Online social dock">
-      <div className="w-full md:max-w-sm">
-        <div className="flex flex-wrap items-center justify-end gap-2">
+    <section
+      className={
+        floating
+          ? 'pointer-events-none fixed bottom-2.5 left-1/2 z-[60] -translate-x-1/2 select-none md:bottom-4 md:left-auto md:right-4 md:translate-x-0'
+          : 'relative mx-auto mt-1 flex h-12 w-full max-w-[450px] select-none items-center justify-center md:justify-end'
+      }
+      aria-label="Online social dock"
+    >
+      <div ref={dockContainerRef} className="pointer-events-auto relative inline-flex items-center">
+        {/* Floating overlay stack (status pills + chat popover) — never takes flow height or shifts layout */}
+        <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 flex -translate-x-1/2 flex-col items-center gap-1.5 md:left-auto md:right-0 md:translate-x-0 md:items-end">
+          {voiceError && (
+            <div
+              role="status"
+              className="pointer-events-auto flex max-w-[300px] items-center gap-1.5 rounded-full border border-amber-400/45 bg-slate-950/95 px-2.5 py-1 text-[11px] font-semibold text-amber-200 shadow-lg backdrop-blur-md"
+            >
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden="true" />
+              <span className="truncate">{voiceError}</span>
+              <button
+                type="button"
+                onClick={() => setVoiceError('')}
+                className="ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-amber-200/70 hover:bg-white/10 hover:text-white"
+                aria-label="Dismiss voice notice"
+              >
+                <X className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
+          {voiceJoined && (
+            <div
+              aria-live="polite"
+              className={`pointer-events-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[10px] font-black shadow-md backdrop-blur-md ${
+                activeSpeakerColor
+                  ? 'border-emerald-300/70 bg-emerald-950/95 text-emerald-200'
+                  : 'border-emerald-400/35 bg-slate-950/90 text-emerald-200/90'
+              }`}
+            >
+              <Radio className={`h-3 w-3 ${activeSpeakerColor ? 'animate-pulse text-emerald-300' : 'text-emerald-400'}`} aria-hidden="true" />
+              <span>{activeSpeakerName ? `${activeSpeakerName} is speaking` : 'Voice connected'}</span>
+            </div>
+          )}
+
+          {isOpen && (
+            <div
+              id="online-chat-panel"
+              className="pointer-events-auto flex w-[min(92vw,344px)] flex-col overflow-hidden rounded-2xl border border-sky-300/35 bg-gradient-to-b from-[#08358A]/98 to-[#041D52]/98 shadow-[0_16px_40px_rgba(0,0,0,0.65)] backdrop-blur-md"
+              aria-label="Room chat"
+            >
+              {/* Compact chat header */}
+              <div className="flex h-11 shrink-0 items-center justify-between border-b border-white/10 bg-[#041A47]/60 px-3">
+                <div className="flex items-center gap-2">
+                  <MessageCircle className="h-4 w-4 text-[#FFD200]" aria-hidden="true" />
+                  <h2 className="text-xs font-black uppercase tracking-wider text-[#FFD200]">Room Chat</h2>
+                  {!chatEnabled && (
+                    <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase text-amber-200">
+                      Off
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-sky-200 transition-colors hover:bg-white/15 hover:text-white"
+                  aria-label="Close room chat"
+                  title="Close chat"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+
+              {/* Fixed-height message viewport (never shifts panel height) */}
+              <div
+                ref={messageListRef}
+                className="h-52 space-y-2 overflow-y-auto px-3 py-2.5"
+                onScroll={(event) => {
+                  const element = event.currentTarget;
+                  shouldAutoScrollRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+                }}
+                aria-live="polite"
+                aria-relevant="additions text"
+                aria-label="Chat messages"
+              >
+                {!chatEnabled && (
+                  <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center text-amber-200">
+                    <MessageSquareOff className="h-6 w-6 opacity-80" aria-hidden="true" />
+                    <p className="text-xs font-semibold">Chat is disabled by the host.</p>
+                  </div>
+                )}
+                {chatEnabled && visibleMessages.length === 0 && (
+                  <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center text-sky-200/75">
+                    <MessageCircle className="h-6 w-6 opacity-60" aria-hidden="true" />
+                    <p className="text-xs font-semibold">Tap a reaction or say hello to your friends.</p>
+                  </div>
+                )}
+                {visibleMessages.map((message) => {
+                  const isMine = message.color === localColor;
+                  const isSenderMuted = mutedColors.has(message.color);
+                  return (
+                    <article
+                      key={message.id}
+                      className={`max-w-[88%] rounded-2xl border px-3 py-1.5 text-xs shadow-sm ${
+                        isMine
+                          ? 'ml-auto rounded-br-sm border-sky-300/30 bg-[#0052CC]'
+                          : 'rounded-bl-sm border-white/10 bg-slate-950/55'
+                      }`}
+                    >
+                      <div className="mb-0.5 flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: COLOR_THEMES[message.color].primary }}
+                            aria-hidden="true"
+                          />
+                          <span
+                            className="truncate text-[11px] font-black"
+                            style={{ color: isMine ? '#FFE066' : COLOR_THEMES[message.color].primaryLight }}
+                          >
+                            {message.name}
+                          </span>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          <time className="text-[9px] font-semibold text-sky-200/75" dateTime={new Date(message.sentAt).toISOString()}>
+                            {new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(message.sentAt)}
+                          </time>
+                          {!isMine && (
+                            <button
+                              type="button"
+                              onClick={() => toggleMutedColor(message.color)}
+                              className="flex h-5 w-5 items-center justify-center rounded-md text-sky-200/75 transition-colors hover:bg-white/10 hover:text-white"
+                              aria-label={`${isSenderMuted ? 'Unmute' : 'Mute'} ${message.name}`}
+                              title={`${isSenderMuted ? 'Unmute' : 'Mute'} ${message.name}`}
+                            >
+                              {isSenderMuted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                      <p className="break-words whitespace-pre-wrap leading-relaxed text-white">{message.text}</p>
+                    </article>
+                  );
+                })}
+              </div>
+
+              {/* Muted player chips (icon + name) */}
+              {mutedColors.size > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-white/10 bg-slate-950/35 px-3 py-1.5" aria-label="Muted players">
+                  {[...mutedColors].map((color) => {
+                    const mutedName = room.participants.find((participant) => participant.color === color)?.name ?? color;
+                    return (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => toggleMutedColor(color)}
+                        className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-bold text-sky-100 hover:bg-white/15"
+                        aria-label={`Unmute ${mutedName}`}
+                        title={`Unmute ${mutedName}`}
+                      >
+                        <VolumeX className="h-3 w-3 text-amber-300" aria-hidden="true" />
+                        <span className="max-w-[96px] truncate">{mutedName}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {chatError && (
+                <div className="flex items-center gap-1.5 border-t border-amber-400/20 bg-amber-950/40 px-3 py-1 text-[11px] font-semibold text-amber-200" role="status">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{chatError}</span>
+                </div>
+              )}
+
+              {/* Quick reactions + single-line message capsule */}
+              <div className="space-y-2 border-t border-white/10 bg-[#031740]/80 p-2.5">
+                <div className="grid grid-cols-6 gap-1" aria-label="Quick reactions">
+                  {REACTIONS.map((reaction) => (
+                    <button
+                      key={reaction.value}
+                      type="button"
+                      onClick={() => sendReaction(reaction.value)}
+                      disabled={!chatEnabled || isCoolingDown}
+                      className="flex h-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-xs font-black text-white transition-transform hover:bg-white/15 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={`Send ${reaction.value.replace('_', ' ')} reaction`}
+                      title={`Send ${reaction.label}`}
+                    >
+                      {reaction.label}
+                    </button>
+                  ))}
+                </div>
+
+                <form
+                  className="flex h-10 items-center gap-1.5 rounded-xl border border-white/15 bg-[#001D4F] pl-3 pr-1 focus-within:border-[#FFD200]/80"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    sendMessage();
+                  }}
+                >
+                  <label className="min-w-0 flex-1">
+                    <span className="sr-only">Chat message</span>
+                    <input
+                      ref={chatInputRef}
+                      type="text"
+                      value={draft}
+                      maxLength={200}
+                      autoComplete="off"
+                      onChange={(event) => setDraft(event.target.value)}
+                      disabled={!chatEnabled || isCoolingDown}
+                      placeholder={chatEnabled ? 'Message…' : 'Chat is off'}
+                      className="h-9 w-full bg-transparent text-xs font-medium text-white outline-none placeholder:text-sky-200/45 disabled:opacity-50"
+                    />
+                  </label>
+                  {characterCount >= 160 && (
+                    <span
+                      className={`shrink-0 font-mono text-[10px] font-bold ${characterCount > 200 ? 'text-rose-300' : 'text-sky-300/80'}`}
+                      aria-live="polite"
+                    >
+                      {200 - characterCount}
+                    </span>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={!draft.trim() || characterCount > 200 || !chatEnabled || isCoolingDown}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#FFD200] text-[#072468] shadow-sm transition-transform hover:bg-[#FFE04D] active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
+                    aria-label="Send chat message"
+                    title="Send message"
+                  >
+                    <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Fixed-height icon-only control capsule */}
+        <div className="inline-flex h-12 items-center gap-1.5 rounded-2xl border border-sky-300/35 bg-[#041E5A]/95 px-2 shadow-[0_10px_26px_rgba(0,0,0,0.48),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-md">
+          {/* Chat icon button */}
           <button
             type="button"
             onClick={() => setIsOpen((open) => !open)}
+            aria-label="Chat"
             aria-expanded={isOpen}
             aria-controls="online-chat-panel"
-            className="relative flex min-h-11 items-center gap-2 rounded-xl border border-sky-300/50 bg-[#003B99] px-4 text-sm font-bold text-white"
+            title={isOpen ? 'Close chat' : chatEnabled ? 'Room chat' : 'Room chat (disabled by host)'}
+            className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition-all active:scale-95 ${
+              isOpen
+                ? 'border-white bg-[#FFD200] text-[#072468] shadow-md'
+                : chatEnabled
+                  ? 'border-sky-300/35 bg-[#004ECC] text-white hover:bg-[#0B64F0]'
+                  : 'border-white/10 bg-slate-800/80 text-slate-400'
+            }`}
           >
-            <MessageCircle className="h-4 w-4" />
-            Chat
+            {chatEnabled ? <MessageCircle className="h-4 w-4" aria-hidden="true" /> : <MessageSquareOff className="h-4 w-4" aria-hidden="true" />}
             {unreadCount > 0 && !isOpen && (
-              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-black" aria-label={`${unreadCount} unread messages`}>
+              <span
+                className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-[#041E5A] bg-rose-500 px-1 text-[9px] font-black leading-none text-white shadow"
+                aria-label={`${unreadCount} unread messages`}
+              >
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
           </button>
+
+          {/* Voice icon controls */}
           {!voiceJoined ? (
             <button
               type="button"
               onClick={() => void joinVoice()}
-              disabled={voiceStarting || room.voiceEnabled === false || !voiceAvailable}
-              className="flex min-h-11 items-center gap-2 rounded-xl border border-emerald-300/50 bg-emerald-950/70 px-3 text-xs font-bold text-emerald-100 disabled:opacity-50"
-              aria-label={voiceStarting ? 'Connecting to room voice' : voiceAvailable ? 'Join room voice' : 'Voice unavailable'}
+              disabled={voiceStarting || !voiceEnabled || !voiceAvailable}
+              aria-label={voiceButtonLabel}
+              title={voiceButtonLabel}
+              className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-45 ${
+                voiceStarting
+                  ? 'border-emerald-300/60 bg-emerald-900/70 text-emerald-200'
+                  : voiceEnabled && voiceAvailable
+                    ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
+                    : 'border-white/10 bg-slate-800/80 text-slate-400'
+              }`}
             >
-              <Headphones className="h-4 w-4" />
-              {voiceStarting ? 'Connecting…' : voiceAvailable ? 'Join voice' : 'Voice unavailable'}
+              {voiceStarting ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : voiceEnabled && voiceAvailable ? (
+                <Headphones className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <MicOff className="h-4 w-4" aria-hidden="true" />
+              )}
             </button>
           ) : (
-            <>
+            <div className="inline-flex h-9 items-center gap-1 rounded-xl border border-emerald-400/40 bg-emerald-950/85 px-1">
               <button
                 type="button"
                 onClick={() => void toggleMicrophone()}
-                className="flex min-h-11 items-center gap-2 rounded-xl border border-emerald-300/50 bg-emerald-950/70 px-3 text-xs font-bold text-emerald-100"
                 aria-label={microphoneEnabled ? 'Mute microphone' : 'Turn microphone on'}
+                aria-pressed={microphoneEnabled}
+                title={microphoneEnabled ? 'Mute microphone' : 'Turn microphone on'}
+                className={`flex h-7 w-7 items-center justify-center rounded-lg transition-all active:scale-95 ${
+                  microphoneEnabled
+                    ? `bg-emerald-400 text-slate-950 shadow-sm ${activeSpeakerColor === localColor ? 'ring-2 ring-white' : ''}`
+                    : 'bg-amber-500/25 text-amber-200 hover:bg-amber-500/35'
+                }`}
               >
-                {microphoneEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-                {microphoneEnabled ? 'Mute mic' : 'Turn mic on'}
+                {microphoneEnabled ? <Mic className="h-3.5 w-3.5" aria-hidden="true" /> : <MicOff className="h-3.5 w-3.5" aria-hidden="true" />}
               </button>
               <button
                 type="button"
                 onClick={() => void stopVoiceClient()}
-                className="flex min-h-11 items-center gap-2 rounded-xl border border-rose-300/50 bg-rose-950/70 px-3 text-xs font-bold text-rose-100"
                 aria-label="Leave room voice"
+                title="Leave voice chat"
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-500/25 text-rose-200 transition-all hover:bg-rose-500 hover:text-white active:scale-95"
               >
-                <PhoneOff className="h-4 w-4" />
-                Leave voice
+                <PhoneOff className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
+          {/* Compact live seat badges for everyone currently in voice */}
+          {seatsInVoice.length > 0 && (
+            <div className="flex items-center -space-x-1 px-0.5" aria-label="Players in voice">
+              {seatsInVoice.map((seatColor) => {
+                const participant = room.participants.find((entry) => entry.color === seatColor);
+                const isSpeaking = activeSpeakerColor === seatColor;
+                const badgeText = participant && isAvatarEmoji(participant.avatar)
+                  ? participant.avatar
+                  : (participant?.name.trim().charAt(0).toUpperCase() || seatColor.charAt(0).toUpperCase());
+                return (
+                  <span
+                    key={seatColor}
+                    title={`${participant?.name ?? COLOR_THEMES[seatColor].name} (in voice)`}
+                    className={`flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-black text-white shadow-sm transition-transform ${
+                      isSpeaking ? 'z-10 scale-110 border-emerald-300 ring-2 ring-emerald-400' : 'border-[#041E5A]'
+                    }`}
+                    style={{ backgroundColor: COLOR_THEMES[seatColor].primary }}
+                  >
+                    {badgeText}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Host room-level chat & voice toggles (clean icon buttons, no bulky text labels) */}
+          {isHost && (
+            <>
+              <span className="mx-0.5 h-5 w-px bg-white/15" aria-hidden="true" />
+              <button
+                type="button"
+                onClick={() => connection.setChatEnabled(!chatEnabled)}
+                aria-label={chatEnabled ? 'Disable chat for this room' : 'Enable chat for this room'}
+                aria-pressed={chatEnabled}
+                title={chatEnabled ? 'Host: Turn off room chat' : 'Host: Turn on room chat'}
+                className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition-all active:scale-95 ${
+                  chatEnabled
+                    ? 'border-white/15 bg-white/5 text-sky-200 hover:bg-white/10'
+                    : 'border-rose-400/45 bg-rose-950/70 text-rose-200 hover:bg-rose-900/70'
+                }`}
+              >
+                {chatEnabled ? <MessageSquare className="h-4 w-4" aria-hidden="true" /> : <MessageSquareOff className="h-4 w-4" aria-hidden="true" />}
+                <Shield className="absolute bottom-1 right-1 h-2.5 w-2.5 text-[#FFD200]" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => connection.setVoiceEnabled(room.voiceEnabled === false)}
+                aria-label={room.voiceEnabled === false ? 'Enable voice for this room' : 'Disable voice for this room'}
+                aria-pressed={voiceEnabled}
+                title={room.voiceEnabled === false ? 'Host: Turn on room voice' : 'Host: Turn off room voice'}
+                className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition-all active:scale-95 ${
+                  voiceEnabled
+                    ? 'border-white/15 bg-white/5 text-emerald-200 hover:bg-white/10'
+                    : 'border-rose-400/45 bg-rose-950/70 text-rose-200 hover:bg-rose-900/70'
+                }`}
+              >
+                {voiceEnabled ? <Volume2 className="h-4 w-4" aria-hidden="true" /> : <VolumeX className="h-4 w-4" aria-hidden="true" />}
+                <Shield className="absolute bottom-1 right-1 h-2.5 w-2.5 text-[#FFD200]" aria-hidden="true" />
               </button>
             </>
           )}
-          {isHost && (
-            <button
-              type="button"
-              onClick={() => connection.setChatEnabled(!chatEnabled)}
-              className="min-h-11 rounded-xl border border-sky-300/40 bg-slate-950/50 px-3 text-xs font-bold text-sky-100"
-              aria-label={chatEnabled ? 'Disable chat for this room' : 'Enable chat for this room'}
-            >
-              {chatEnabled ? 'Disable chat' : 'Enable chat'}
-            </button>
-          )}
-          {isHost && (
-            <button
-              type="button"
-              onClick={() => connection.setVoiceEnabled(room.voiceEnabled === false)}
-              className="min-h-11 rounded-xl border border-emerald-300/40 bg-slate-950/50 px-3 text-xs font-bold text-emerald-100"
-              aria-label={room.voiceEnabled === false ? 'Enable voice for this room' : 'Disable voice for this room'}
-            >
-              {room.voiceEnabled === false ? 'Enable voice' : 'Disable voice'}
-            </button>
-          )}
         </div>
-        {voiceError && <p className="mt-1 text-right text-xs text-amber-200" role="status">{voiceError}</p>}
-        {voiceJoined && (
-          <p className="mt-1 text-right text-[10px] text-emerald-200" aria-live="polite">
-            {activeSpeakerColor ? `${room.participants.find((participant) => participant.color === activeSpeakerColor)?.name ?? activeSpeakerColor} is speaking` : 'Voice connected'}
-          </p>
-        )}
-
-        {isOpen && (
-          <div
-            id="online-chat-panel"
-            className="mt-2 overflow-hidden rounded-2xl border border-sky-300/40 bg-[#063278] shadow-xl"
-            aria-label="Room chat"
-          >
-            <div className="flex items-center justify-between border-b border-sky-300/20 px-3 py-2">
-              <h2 className="text-sm font-black text-[#FFD200]">Room chat</h2>
-              <span className="text-[10px] text-sky-200">Messages disappear when the room closes</span>
-            </div>
-            <div
-              ref={messageListRef}
-              className="max-h-56 space-y-2 overflow-y-auto p-3"
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                shouldAutoScrollRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
-              }}
-              aria-live="polite"
-              aria-relevant="additions text"
-              aria-label="Chat messages"
-            >
-              {!chatEnabled && <p className="text-center text-xs text-amber-200">Chat is disabled by the host.</p>}
-              {chatEnabled && visibleMessages.length === 0 && <p className="text-center text-xs text-sky-200">Say hello to your friends.</p>}
-              {visibleMessages.map((message) => (
-                <article key={message.id} className={`max-w-[90%] rounded-xl px-3 py-2 text-sm ${message.color === localColor ? 'ml-auto bg-[#0052CC]' : 'bg-slate-950/45'}`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="truncate text-[11px] font-bold" style={{ color: COLOR_THEMES[message.color].primary }}>{message.name}</span>
-                    <time className="shrink-0 text-[10px] text-sky-200" dateTime={new Date(message.sentAt).toISOString()}>
-                      {new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(message.sentAt)}
-                    </time>
-                  </div>
-                  <p className="break-words whitespace-pre-wrap text-white">{message.text}</p>
-                  {message.color !== localColor && (
-                    <button
-                      type="button"
-                      onClick={() => toggleMutedColor(message.color)}
-                      className="mt-1 flex items-center gap-1 text-[10px] text-sky-200 underline"
-                      aria-label={`${mutedColors.has(message.color) ? 'Unmute' : 'Mute'} ${message.name}`}
-                    >
-                      {mutedColors.has(message.color) ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
-                      {mutedColors.has(message.color) ? 'Unmute player' : 'Mute player'}
-                    </button>
-                  )}
-                </article>
-              ))}
-            </div>
-            {mutedColors.size > 0 && (
-              <div className="flex flex-wrap gap-2 px-3 text-[10px]" aria-label="Muted players">
-                {[...mutedColors].map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => toggleMutedColor(color)}
-                    className="rounded-lg bg-slate-950/40 px-2 py-1 text-sky-100 underline"
-                    aria-label={`Unmute ${room.participants.find((participant) => participant.color === color)?.name ?? color}`}
-                  >
-                    Unmute {room.participants.find((participant) => participant.color === color)?.name ?? color}
-                  </button>
-                ))}
-              </div>
-            )}
-            {chatError && <p className="px-3 text-xs text-amber-200" role="status">{chatError}</p>}
-            <div className="border-t border-sky-300/20 p-3">
-              <div className="mb-2 flex items-center justify-between gap-1" aria-label="Quick reactions">
-                {REACTIONS.map((reaction) => (
-                  <button
-                    key={reaction.value}
-                    type="button"
-                    onClick={() => sendReaction(reaction.value)}
-                    disabled={!chatEnabled || isCoolingDown}
-                    className="min-h-9 min-w-9 rounded-lg bg-slate-950/40 text-sm disabled:opacity-40"
-                    aria-label={`Send ${reaction.value.replace('_', ' ')} reaction`}
-                  >
-                    {reaction.label}
-                  </button>
-                ))}
-              </div>
-              <form
-                className="flex items-end gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  sendMessage();
-                }}
-              >
-                <label className="min-w-0 flex-1">
-                  <span className="sr-only">Chat message</span>
-                  <textarea
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        sendMessage();
-                      }
-                    }}
-                    rows={1}
-                    disabled={!chatEnabled || isCoolingDown}
-                    placeholder={chatEnabled ? 'Message your friends…' : 'Chat is disabled'}
-                    className="max-h-24 min-h-10 w-full resize-y rounded-xl border border-sky-300/30 bg-[#00245F] px-3 py-2 text-sm text-white outline-none focus:border-amber-300 disabled:opacity-50"
-                  />
-                </label>
-                <button
-                  type="submit"
-                  disabled={!draft.trim() || characterCount > 200 || !chatEnabled || isCoolingDown}
-                  className="flex min-h-10 min-w-10 items-center justify-center rounded-xl bg-amber-400 text-slate-950 disabled:opacity-40"
-                  aria-label="Send chat message"
-                >
-                  <Send className="h-4 w-4" />
-                </button>
-                <span className={`sr-only ${characterCount > 180 ? '' : 'hidden'}`} aria-live="polite">
-                  {characterCount} of 200 characters
-                </span>
-              </form>
-              <p className={`mt-1 text-right text-[10px] ${characterCount > 200 ? 'text-rose-300' : 'text-sky-200'}`} aria-hidden="true">
-                {characterCount}/200
-              </p>
-            </div>
-          </div>
-        )}
       </div>
     </section>
   );

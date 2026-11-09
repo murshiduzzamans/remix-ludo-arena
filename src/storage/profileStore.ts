@@ -5,6 +5,7 @@
 
 import { DEFAULT_RULES } from '../engine/gameEngine';
 import { GameMode, GameRules, PlayerColor } from '../engine/types';
+import { AVATAR_EMOJI_OPTIONS, isAvatarEmoji } from '../shared/avatars';
 
 export interface MatchRecord {
   id: string;
@@ -50,10 +51,10 @@ const IDEMPOTENCY_KEY = 'ludo_arena_idempotency_v1';
 const RESULT_STATE_KEY = 'ludo_arena_result_state_v2';
 
 export const DEFAULT_COINS = 5000;
-export const AVATAR_EMOJI_OPTIONS = ['👩', '👦', '🦁', '🏎️', '👑', '🦊', '🐯', '🥷'] as const;
+export { AVATAR_EMOJI_OPTIONS };
 
 export function getProfileEmoji(profile: Pick<UserProfile, 'avatarSeed'>): string {
-  if (profile.avatarSeed && (AVATAR_EMOJI_OPTIONS as readonly string[]).includes(profile.avatarSeed)) {
+  if (isAvatarEmoji(profile.avatarSeed)) {
     return profile.avatarSeed;
   }
   return '👩';
