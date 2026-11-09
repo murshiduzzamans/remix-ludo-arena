@@ -2,6 +2,9 @@ name = "ludo-arena-multiplayer"
 main = "worker/index.ts"
 compatibility_date = "2026-11-06"
 
+[vars]
+ACCOUNTS_ENABLED = "true"
+
 [[durable_objects.bindings]]
 name = "LUDO_ROOMS"
 class_name = "LudoRoom"
