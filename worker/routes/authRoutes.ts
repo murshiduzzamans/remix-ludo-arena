@@ -719,8 +719,10 @@ export async function handleSaveAvatar(request: Request, env: Env): Promise<Resp
 
   const requestOrigin = request.headers.get('Origin');
   const allowedOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map(o => o.trim()).filter(Boolean);
-  if (requestOrigin && !isOriginAllowed(request, allowedOrigins)) {
-    return json({ error: 'Origin not allowed.' }, 403, null);
+  if (!isOriginAllowed(request, allowedOrigins) ||
+    !hasRequiredHeader(request, 'X-Ludo-Action') ||
+    request.headers.get('X-Ludo-Action') !== 'save-avatar') {
+    return json({ error: 'Origin or request validation failed.' }, 403, null);
   }
 
   const sessionToken = getCookie(request, '__Host-session');

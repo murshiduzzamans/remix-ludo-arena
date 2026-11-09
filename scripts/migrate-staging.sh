@@ -31,7 +31,7 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     filename=$(basename "$migration_file")
     echo "⚙️  Applying: $filename"
 
-    if npx wrangler d1 execute "$DB_NAME" --env staging --file="$migration_file"; then
+    if npx wrangler d1 execute "$DB_NAME" --env staging --remote --file="$migration_file"; then
         echo "✅ Success: $filename"
     else
         echo "❌ Failed: $filename"
@@ -45,7 +45,4 @@ echo ""
 echo "📊 Verifying database schema..."
 
 # Verify tables were created
-npx wrangler d1 execute "$DB_NAME" --env staging --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
-
-echo ""
-echo "✨ Database ready for use!"
+npx wrangler d1 execute "$DB_NAME" --env staging --remote --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"

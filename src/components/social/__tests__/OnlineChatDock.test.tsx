@@ -124,9 +124,11 @@ describe('OnlineChatDock', () => {
     act(() => listeners[0]({ type: 'voice_token', authToken: 'participant-token' }));
     await waitFor(() => expect(sdkMocks.init).toHaveBeenCalledWith({
       authToken: 'participant-token',
-      defaults: { audio: false, video: false },
+      defaults: { audio: true, video: false },
     }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn microphone on' })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mute microphone' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Mute microphone' }));
+    await waitFor(() => expect(sdkMocks.meeting.self.disableAudio).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole('button', { name: 'Turn microphone on' }));
     await waitFor(() => expect(sdkMocks.meeting.self.enableAudio).toHaveBeenCalledOnce());
 

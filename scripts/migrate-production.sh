@@ -45,7 +45,7 @@ mkdir -p "$BACKUP_DIR"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 BACKUP_FILE="$BACKUP_DIR/pre-migration-$TIMESTAMP.sql"
 
-npx wrangler d1 export "$DB_NAME" --env production --output "$BACKUP_FILE"
+npx wrangler d1 export "$DB_NAME" --env production --remote --output "$BACKUP_FILE"
 echo "✅ Backup saved: $BACKUP_FILE"
 echo ""
 
@@ -54,7 +54,7 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     filename=$(basename "$migration_file")
     echo "⚙️  Applying: $filename"
 
-    if npx wrangler d1 execute "$DB_NAME" --env production --file="$migration_file"; then
+    if npx wrangler d1 execute "$DB_NAME" --env production --remote --file="$migration_file"; then
         echo "✅ Success: $filename"
     else
         echo "❌ Failed: $filename"
@@ -70,7 +70,8 @@ echo ""
 echo "📊 Verifying database schema..."
 
 # Verify tables were created
-npx wrangler d1 execute "$DB_NAME" --env production --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+npx wrangler d1 execute "$DB_NAME" --env production --remote --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+npx wrangler d1 execute "$DB_NAME" --env production --remote --command="PRAGMA table_info(users);"
 
 echo ""
 echo "✨ Production database ready!"

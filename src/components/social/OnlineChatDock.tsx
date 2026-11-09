@@ -78,7 +78,7 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
     let meeting: RealtimeKitClient | null = null;
     try {
       const { default: RealtimeKit } = await import('@cloudflare/realtimekit');
-      meeting = await RealtimeKit.init({ authToken, defaults: { audio: false, video: false } });
+      meeting = await RealtimeKit.init({ authToken, defaults: { audio: true, video: false } });
       if (generation !== voiceGenerationRef.current) {
         await meeting.leave();
         return;
@@ -94,6 +94,7 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
         await meeting.leave();
         return;
       }
+      setMicrophoneEnabled(true);
       setVoiceJoined(true);
       setVoiceStarting(false);
       setVoiceError('');

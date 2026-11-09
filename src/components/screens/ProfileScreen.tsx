@@ -74,25 +74,35 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
   const handleAvatarUpload = async (base64Image: string) => {
     setAvatarError(null);
     let savedOnline = false;
+    let syncError: string | null = null;
     try {
       const response = await fetch('/api/profile/avatar', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Ludo-Action': 'save-avatar',
+        },
         credentials: 'include',
         body: JSON.stringify({ avatarUrl: base64Image }),
       });
       savedOnline = response.ok;
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-        setAvatarError(errorData.error || 'Avatar sync failed. The local copy was saved.');
+        const serverError = typeof errorData.error === 'string' ? errorData.error : 'Upload failed';
+        syncError = response.status === 503
+          ? 'Account sync is not enabled on this Worker. The image remains on this device.'
+          : response.status === 401
+            ? 'Your account session expired. Sign in again, then retry the upload.'
+            : serverError;
       }
     } catch {
-      setAvatarError('Avatar sync failed. The local copy was saved.');
+      syncError = 'Account sync failed. The local copy was saved.';
     }
 
     const updated = { ...profile, avatarUrl: base64Image };
     setProfile(updated);
     saveProfile(updated);
+    if (syncError) setAvatarError(syncError);
     sound.triggerHaptic(20);
     sound.playMove();
     return savedOnline;
@@ -263,7 +273,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
                     try {
                       const response = await fetch('/api/profile/avatar', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'X-Ludo-Action': 'save-avatar',
+                        },
                         credentials: 'include',
                         body: JSON.stringify({ avatarUrl: null }),
                       });
