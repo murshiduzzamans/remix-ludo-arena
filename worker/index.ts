@@ -23,7 +23,7 @@ import {
 } from './routes/authRoutes';
 import type { D1Database } from '@cloudflare/workers-types';
 import { safeRecordMatch } from './accounts/progress';
-import { getCookie } from './auth/cookies';
+import { getCookie, getSessionToken } from './auth/cookies';
 import { validateSession } from './accounts/service';
 
 export { VoiceBudget } from './voiceBudget';
@@ -499,7 +499,7 @@ export default {
     }
 
     if (roomRoute[2] === 'ws' && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
-      const sessionToken = getCookie(request, '__Host-session');
+      const sessionToken = getSessionToken(request);
       let requestUserId: string | undefined;
       if (sessionToken && env.DB && env.SESSION_SECRET) {
         const session = await validateSession(env.DB, sessionToken, env.SESSION_SECRET);

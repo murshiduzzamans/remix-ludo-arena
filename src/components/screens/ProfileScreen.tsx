@@ -78,7 +78,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLead
     let savedOnline = false;
     let syncError: string | null = null;
     try {
-      const response = await fetch('/api/profile/avatar', {
+      let response = await fetch('/api/profile/avatar', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -87,18 +87,47 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLead
         credentials: 'include',
         body: JSON.stringify({ avatarUrl: base64Image }),
       });
+
+      // If session expired or unauthenticated, automatically provision a guest session and retry
+      if (response.status === 401) {
+        try {
+          const guestResponse = await fetch('/api/auth/guest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              displayName: profile.name || 'Arena Master',
+              avatarId: 0,
+            }),
+          });
+          if (guestResponse.ok) {
+            response = await fetch('/api/profile/avatar', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Ludo-Action': 'save-avatar',
+              },
+              credentials: 'include',
+              body: JSON.stringify({ avatarUrl: base64Image }),
+            });
+          }
+        } catch {
+          // Fall through to standard status check
+        }
+      }
+
       savedOnline = response.ok;
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
         const serverError = typeof errorData.error === 'string' ? errorData.error : 'Upload failed';
         syncError = response.status === 503
-          ? 'Account sync is not enabled on this Worker. The image remains on this device.'
+          ? 'Account sync is not enabled on this server. The image remains saved on this device.'
           : response.status === 401
-            ? 'Your account session expired. Sign in again, then retry the upload.'
+            ? 'Account session expired. Sign in again to sync across devices.'
             : serverError;
       }
     } catch {
-      syncError = 'Account sync failed. The local copy was saved.';
+      syncError = 'Multiplayer server is offline. Picture saved locally on this device.';
     }
 
     const updated = { ...profile, avatarUrl: base64Image };

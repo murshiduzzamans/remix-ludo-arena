@@ -174,7 +174,10 @@ export function AvatarUploader({ currentAvatarUrl, onUpload, onClose, maxSizeMB 
     try {
       const savedOnline = await onUpload(croppedImage);
       if (!savedOnline) {
-        setError('Saved locally, but account sync failed.');
+        setError('Saved locally on this device (offline mode).');
+        setTimeout(() => {
+          onClose();
+        }, 1400);
         return;
       }
       onClose();

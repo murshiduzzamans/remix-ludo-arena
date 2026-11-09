@@ -40,6 +40,23 @@ export function AccountIndicator() {
   const [restoring, setRestoring] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const err = new URLSearchParams(window.location.search).get('auth_error');
+    if (err) {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('auth_error');
+      window.history.replaceState({}, '', cleanUrl.toString());
+      if (err === 'github_not_configured') {
+        return 'GitHub OAuth is not configured yet on this server. Add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to .dev.vars or Cloudflare secrets.';
+      }
+      if (err === 'google_not_configured') {
+        return 'Google OAuth is not configured yet on this server. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .dev.vars or Cloudflare secrets.';
+      }
+      return 'Authentication could not be completed. Please try again or use Guest / Sync Code.';
+    }
+    return null;
+  });
 
   useEffect(() => {
     fetchAccount();
@@ -207,6 +224,19 @@ export function AccountIndicator() {
             Have a Sync Code?
           </button>
         </div>
+
+        {authError && (
+          <div className="p-2.5 rounded-xl bg-amber-950/70 border border-amber-500/50 text-amber-200 text-xs flex items-start justify-between gap-2">
+            <span>⚠️ {authError}</span>
+            <button
+              onClick={() => setAuthError(null)}
+              className="text-amber-300 hover:text-white font-bold text-xs"
+              aria-label="Dismiss error"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {/* GitHub Login (No CC / No billing needed) */}

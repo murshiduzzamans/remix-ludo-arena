@@ -112,6 +112,19 @@ export function isInAppBrowser(userAgent: string): boolean {
   return false;
 }
 
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+function isPrivateIp(hostname: string): boolean {
+  return (
+    isLoopback(hostname) ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname)
+  );
+}
+
 /**
  * Checks if origin header is allowed for CSRF protection
  */
@@ -119,13 +132,31 @@ export function isOriginAllowed(request: Request, allowedOrigins: string[]): boo
   const origin = request.headers.get('Origin');
   if (!origin) return false;
 
-  const requestUrl = new URL(request.url);
+  let originUrl: URL;
+  let requestUrl: URL;
+  try {
+    originUrl = new URL(origin);
+    requestUrl = new URL(request.url);
+  } catch {
+    return false;
+  }
 
   // Same-origin is always allowed
   if (origin === requestUrl.origin) return true;
 
   // Check against allowed origins list
-  return allowedOrigins.includes(origin);
+  if (allowedOrigins.includes(origin)) return true;
+
+  // Check proxied host header (e.g. Vite proxy)
+  const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+  if (forwardedHost && originUrl.host === forwardedHost) return true;
+
+  // Permit separate Vite and Worker ports and LAN IPs in local development
+  if (isPrivateIp(requestUrl.hostname) && isPrivateIp(originUrl.hostname)) {
+    return true;
+  }
+
+  return false;
 }
 
 /**

@@ -25,7 +25,15 @@ import {
 } from '../accounts/service';
 import { createOAuthState, buildAuthorizationUrl, exchangeCodeForTokens, verifyIdToken } from '../auth/google';
 import { buildGithubAuthUrl, exchangeGithubCodeForToken, fetchGithubUser } from '../auth/github';
-import { createSessionCookie, createOAuthStateCookie, clearCookie, getCookie } from '../auth/cookies';
+import {
+  createSessionCookie,
+  createOAuthStateCookie,
+  clearCookie,
+  getCookie,
+  getSessionToken,
+  getOAuthStateToken,
+  isSecureConnection,
+} from '../auth/cookies';
 import { signData, verifySignature } from '../auth/crypto';
 import { validateDisplayName, validateAvatarId, validateAvatarImage, isInAppBrowser, isOriginAllowed, hasRequiredHeader } from '../auth/validation';
 import { LEADERBOARD_CONFIG } from '../accounts/config';
@@ -92,7 +100,7 @@ export async function handleGuestAuth(request: Request, env: Env): Promise<Respo
 
   try {
     const { user, sessionToken } = await createGuestSession(env.DB!, displayName, avatarId, env.SESSION_SECRET!);
-    const cookie = createSessionCookie(sessionToken);
+    const cookie = createSessionCookie(sessionToken, undefined, request);
 
     return new Response(JSON.stringify({
       user: {
@@ -121,11 +129,47 @@ export async function handleGuestAuth(request: Request, env: Env): Promise<Respo
  */
 export async function handleGoogleAuthStart(request: Request, env: Env): Promise<Response> {
   if (!isAccountsEnabled(env)) {
-    return new Response('Accounts are not enabled.', { status: 503 });
+    return new Response(
+      `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Accounts Disabled</title></head>
+<body style="font-family: system-ui, sans-serif; background: #090D16; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1rem; text-align: center;">
+  <div style="background: #0B2A68; border: 2px solid #FFD200; border-radius: 1.25rem; padding: 2rem; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+    <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🔒</div>
+    <h2 style="color: #FFD200; margin: 0 0 0.5rem 0;">Account System Offline</h2>
+    <p style="color: #93c5fd; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem;">
+      Account persistence requires SESSION_SECRET and D1 database to be configured on this server.
+    </p>
+    <a href="/" style="display: inline-block; background: #FFD200; color: #072468; font-weight: 900; padding: 0.75rem 1.5rem; border-radius: 0.75rem; text-decoration: none; font-size: 0.9rem;">
+      Return to Arena
+    </a>
+  </div>
+</body>
+</html>`,
+      { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    );
   }
 
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
-    return new Response('Google sign-in is not configured.', { status: 501 });
+    return new Response(
+      `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Google Sign-In Not Configured</title></head>
+<body style="font-family: system-ui, sans-serif; background: #090D16; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1rem; text-align: center;">
+  <div style="background: #0B2A68; border: 2px solid #FFD200; border-radius: 1.25rem; padding: 2rem; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+    <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">⚙️</div>
+    <h2 style="color: #FFD200; margin: 0 0 0.5rem 0;">Google Sign-In Setup</h2>
+    <p style="color: #93c5fd; font-size: 0.85rem; line-height: 1.5; margin-bottom: 1.5rem;">
+      Google sign-in is not configured on this server. Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to your Cloudflare secrets or <code>.dev.vars</code>.
+    </p>
+    <a href="/" style="display: inline-block; background: #FFD200; color: #072468; font-weight: 900; padding: 0.75rem 1.5rem; border-radius: 0.75rem; text-decoration: none; font-size: 0.9rem;">
+      Return to Arena
+    </a>
+  </div>
+</body>
+</html>`,
+      { status: 501, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    );
   }
 
   // Check for in-app browser
@@ -163,7 +207,7 @@ export async function handleGoogleAuthStart(request: Request, env: Env): Promise
       oauthState.codeVerifier
     );
 
-    const stateCookie = createOAuthStateCookie(signedState);
+    const stateCookie = createOAuthStateCookie(signedState, request);
 
     return new Response(null, {
       status: 302,
@@ -200,7 +244,7 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
   }
 
   // Retrieve and verify OAuth state
-  const signedState = getCookie(request, '__Host-oauth-state');
+  const signedState = getOAuthStateToken(request);
   if (!signedState) {
     return new Response('OAuth state not found.', { status: 400 });
   }
@@ -244,7 +288,7 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
     const claims = await verifyIdToken(idToken, env.GOOGLE_CLIENT_ID!, oauthState.nonce);
 
     // Get current session if exists
-    const sessionToken = getCookie(request, '__Host-session');
+    const sessionToken = getSessionToken(request);
     let currentUserId: string | undefined;
 
     if (sessionToken) {
@@ -270,8 +314,8 @@ export async function handleGoogleAuthCallback(request: Request, env: Env): Prom
       env.SESSION_SECRET!
     );
 
-    const cookie = createSessionCookie(result.sessionToken);
-    const clearStateCookie = clearCookie('__Host-oauth-state');
+    const cookie = createSessionCookie(result.sessionToken, undefined, request);
+    const clearStateCookie = clearCookie(isSecureConnection(request) ? '__Host-oauth-state' : 'ludo_oauth_state', request);
 
     const response = new Response(
       `<!DOCTYPE html>
@@ -316,7 +360,7 @@ export async function handleLogout(request: Request, env: Env): Promise<Response
     return json({ error: 'Origin not allowed.' }, 403, null);
   }
 
-  const sessionToken = getCookie(request, '__Host-session');
+  const sessionToken = getSessionToken(request);
   if (sessionToken) {
     try {
       await logout(env.DB!, sessionToken, env.SESSION_SECRET!);
@@ -325,7 +369,7 @@ export async function handleLogout(request: Request, env: Env): Promise<Response
     }
   }
 
-  const cookie = clearCookie('__Host-session');
+  const cookie = clearCookie(isSecureConnection(request) ? '__Host-session' : 'ludo_session', request);
 
   return new Response(JSON.stringify({ success: true }), {
     status: 200,
@@ -346,7 +390,7 @@ export async function handleGetMe(request: Request, env: Env): Promise<Response>
     return json({ error: 'Accounts are not enabled.' }, 503);
   }
 
-  const sessionToken = getCookie(request, '__Host-session');
+  const sessionToken = getSessionToken(request);
   if (!sessionToken) {
     return json({ error: 'Not authenticated.' }, 401);
   }
@@ -402,7 +446,7 @@ export async function handleUpdateMe(request: Request, env: Env): Promise<Respon
     return json({ error: 'Origin not allowed.' }, 403, null);
   }
 
-  const sessionToken = getCookie(request, '__Host-session');
+  const sessionToken = getSessionToken(request);
   if (!sessionToken) {
     return json({ error: 'Not authenticated.' }, 401);
   }
@@ -453,7 +497,7 @@ export async function handleDeleteMe(request: Request, env: Env): Promise<Respon
     return json({ error: 'Origin not allowed.' }, 403, null);
   }
 
-  const sessionToken = getCookie(request, '__Host-session');
+  const sessionToken = getSessionToken(request);
   if (!sessionToken) {
     return json({ error: 'Not authenticated.' }, 401);
   }
@@ -465,7 +509,7 @@ export async function handleDeleteMe(request: Request, env: Env): Promise<Respon
     }
 
     await deleteAccount(env.DB!, session.user.id);
-    const cookie = clearCookie('__Host-session');
+    const cookie = clearCookie(isSecureConnection(request) ? '__Host-session' : 'ludo_session', request);
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
@@ -529,11 +573,47 @@ export async function handleGetLeaderboard(request: Request, env: Env): Promise<
  */
 export async function handleGithubAuthStart(request: Request, env: Env): Promise<Response> {
   if (!isAccountsEnabled(env)) {
-    return new Response('Accounts are not enabled.', { status: 503 });
+    return new Response(
+      `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Accounts Disabled</title></head>
+<body style="font-family: system-ui, sans-serif; background: #090D16; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1rem; text-align: center;">
+  <div style="background: #0B2A68; border: 2px solid #FFD200; border-radius: 1.25rem; padding: 2rem; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+    <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🔒</div>
+    <h2 style="color: #FFD200; margin: 0 0 0.5rem 0;">Account System Offline</h2>
+    <p style="color: #93c5fd; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem;">
+      Account persistence requires SESSION_SECRET and D1 database to be configured on this server.
+    </p>
+    <a href="/" style="display: inline-block; background: #FFD200; color: #072468; font-weight: 900; padding: 0.75rem 1.5rem; border-radius: 0.75rem; text-decoration: none; font-size: 0.9rem;">
+      Return to Arena
+    </a>
+  </div>
+</body>
+</html>`,
+      { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    );
   }
 
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
-    return new Response('GitHub sign-in is not configured.', { status: 501 });
+    return new Response(
+      `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>GitHub Sign-In Setup</title></head>
+<body style="font-family: system-ui, sans-serif; background: #090D16; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1rem; text-align: center;">
+  <div style="background: #0B2A68; border: 2px solid #FFD200; border-radius: 1.25rem; padding: 2rem; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+    <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🐙</div>
+    <h2 style="color: #FFD200; margin: 0 0 0.5rem 0;">GitHub Sign-In Setup</h2>
+    <p style="color: #93c5fd; font-size: 0.85rem; line-height: 1.5; margin-bottom: 1.5rem;">
+      GitHub OAuth is not configured on this server. To enable it, create an OAuth app in GitHub Developer Settings and add <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> to your Cloudflare secrets or <code>.dev.vars</code>.
+    </p>
+    <a href="/" style="display: inline-block; background: #FFD200; color: #072468; font-weight: 900; padding: 0.75rem 1.5rem; border-radius: 0.75rem; text-decoration: none; font-size: 0.9rem;">
+      Return to Arena
+    </a>
+  </div>
+</body>
+</html>`,
+      { status: 501, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    );
   }
 
   const redirectUri = getRedirectUri(request, '/api/auth/github/callback');
@@ -550,7 +630,7 @@ export async function handleGithubAuthStart(request: Request, env: Env): Promise
       oauthState.state
     );
 
-    const stateCookie = createOAuthStateCookie(signedState);
+    const stateCookie = createOAuthStateCookie(signedState, request);
 
     return new Response(null, {
       status: 302,
@@ -581,7 +661,7 @@ export async function handleGithubAuthCallback(request: Request, env: Env): Prom
     return new Response('Missing code or state parameter.', { status: 400 });
   }
 
-  const signedState = getCookie(request, '__Host-oauth-state');
+  const signedState = getOAuthStateToken(request);
   if (!signedState) {
     return new Response('Invalid state cookie.', { status: 400 });
   }
@@ -627,7 +707,7 @@ export async function handleGithubAuthCallback(request: Request, env: Env): Prom
       'Player';
 
     // Get current session if exists
-    const sessionToken = getCookie(request, '__Host-session');
+    const sessionToken = getSessionToken(request);
     let currentUserId: string | undefined;
 
     if (sessionToken) {
@@ -650,8 +730,8 @@ export async function handleGithubAuthCallback(request: Request, env: Env): Prom
       env.SESSION_SECRET!
     );
 
-    const cookie = createSessionCookie(result.sessionToken);
-    const clearStateCookie = clearCookie('__Host-oauth-state');
+    const cookie = createSessionCookie(result.sessionToken, undefined, request);
+    const clearStateCookie = clearCookie(isSecureConnection(request) ? '__Host-oauth-state' : 'ludo_oauth_state', request);
 
     const response = new Response(
       `<!DOCTYPE html>
@@ -690,7 +770,7 @@ export async function handleGetSyncCode(request: Request, env: Env): Promise<Res
     return json({ error: 'Accounts are not enabled.' }, 503);
   }
 
-  const sessionToken = getCookie(request, '__Host-session');
+  const sessionToken = getSessionToken(request);
   if (!sessionToken) {
     return json({ error: 'Not authenticated.' }, 401);
   }
@@ -725,9 +805,23 @@ export async function handleSaveAvatar(request: Request, env: Env): Promise<Resp
     return json({ error: 'Origin or request validation failed.' }, 403, null);
   }
 
-  const sessionToken = getCookie(request, '__Host-session');
-  if (!sessionToken) {
-    return json({ error: 'Not authenticated.' }, 401);
+  let sessionToken = getSessionToken(request);
+  let newSessionCookie: string | null = null;
+  let userId: string | null = null;
+
+  if (sessionToken) {
+    const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
+    if (session) {
+      userId = session.user.id;
+    }
+  }
+
+  // If no active session, seamlessly provision a guest account so avatar sync never fails
+  if (!userId) {
+    const guest = await createGuestSession(env.DB!, 'Arena Master', 0, env.SESSION_SECRET!);
+    userId = guest.user.id;
+    sessionToken = guest.sessionToken;
+    newSessionCookie = createSessionCookie(sessionToken, undefined, request);
   }
 
   let body: { avatarUrl?: unknown };
@@ -747,13 +841,18 @@ export async function handleSaveAvatar(request: Request, env: Env): Promise<Resp
   }
 
   try {
-    const session = await validateSession(env.DB!, sessionToken, env.SESSION_SECRET!);
-    if (!session) {
-      return json({ error: 'Session expired.' }, 401);
-    }
-
-    await saveAvatar(env.DB!, session.user.id, avatarUrl);
-    return json({ success: true, avatarUrl });
+    await saveAvatar(env.DB!, userId, avatarUrl);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Credentials': 'true',
+      'Cache-Control': 'no-store',
+      ...(requestOrigin ? { 'Access-Control-Allow-Origin': requestOrigin } : {}),
+      ...(newSessionCookie ? { 'Set-Cookie': newSessionCookie } : {}),
+    };
+    return new Response(JSON.stringify({ success: true, avatarUrl }), {
+      status: 200,
+      headers,
+    });
   } catch (error) {
     console.error('Save avatar error:', error);
     return json({ error: 'Failed to save avatar.' }, 500);
@@ -796,7 +895,7 @@ export async function handleRestoreWithSyncCode(request: Request, env: Env): Pro
     if (!profile) {
       return json({ error: 'Restored profile not found.' }, 404);
     }
-    const cookie = createSessionCookie(restored.sessionToken);
+    const cookie = createSessionCookie(restored.sessionToken, undefined, request);
 
     return new Response(JSON.stringify({
       user: {
