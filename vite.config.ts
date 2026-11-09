@@ -12,6 +12,7 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
+        selfDestroying: true,
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'manifest.json'],
         manifest: false,
