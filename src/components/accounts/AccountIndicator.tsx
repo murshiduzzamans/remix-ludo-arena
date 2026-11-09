@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { loadProfile } from '../../storage/profileStore';
+import { getProfileEmoji, loadProfile, saveProfile } from '../../storage/profileStore';
 
 interface AccountUser {
   id: string;
@@ -27,7 +27,12 @@ interface AccountStats {
   level: number;
 }
 
-export function AccountIndicator() {
+interface AccountIndicatorProps {
+  onProfileSync?: () => void;
+}
+
+export function AccountIndicator({ onProfileSync }: AccountIndicatorProps = {}) {
+  const [localProfile, setLocalProfile] = useState(() => loadProfile());
   const [user, setUser] = useState<AccountUser | null>(null);
   const [stats, setStats] = useState<AccountStats | null>(null);
   const [syncCode, setSyncCode] = useState<string | null>(null);
@@ -76,13 +81,13 @@ export function AccountIndicator() {
       setAccountsEnabled(true);
 
       if (response.status === 401) {
-        const localProfile = loadProfile();
+        const currentProfile = loadProfile();
         const guestResponse = await fetch('/api/auth/guest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            displayName: localProfile.name || 'Arena Master',
+            displayName: currentProfile.name || 'Arena Master',
             avatarId: 0,
           }),
         });
@@ -95,6 +100,19 @@ export function AccountIndicator() {
         const data = (await response.json()) as { user: AccountUser; stats: AccountStats };
         setUser(data.user);
         setStats(data.stats);
+        const current = loadProfile();
+        const nextAvatarUrl = data.user.avatarUrl ?? current.avatarUrl ?? null;
+        const nextName = data.user.displayName && data.user.displayName !== 'Arena Master'
+          ? data.user.displayName
+          : current.name;
+        if (nextAvatarUrl !== current.avatarUrl || nextName !== current.name) {
+          const updated = { ...current, avatarUrl: nextAvatarUrl, name: nextName };
+          saveProfile(updated);
+          setLocalProfile(updated);
+          onProfileSync?.();
+        } else {
+          setLocalProfile(current);
+        }
         fetchSyncCode();
       }
     } catch (error) {
@@ -193,12 +211,12 @@ export function AccountIndicator() {
 
   if (loading) {
     return (
-      <div className="w-full px-4 py-2 bg-slate-900/60 rounded-xl border border-slate-700/50">
+      <div className="w-full px-3.5 py-2 bg-gradient-to-r from-[#0B64F0]/80 via-[#0448BC]/80 to-[#023188]/80 rounded-2xl border-2 border-[#FFD200]/60 shadow-md">
         <div className="animate-pulse flex items-center space-x-3">
-          <div className="rounded-full bg-slate-700 h-9 w-9"></div>
+          <div className="rounded-xl bg-[#003080] border border-sky-400/30 h-9 w-9"></div>
           <div className="flex-1 space-y-1.5 py-1">
-            <div className="h-3 bg-slate-700 rounded w-24"></div>
-            <div className="h-2 bg-slate-700 rounded w-16"></div>
+            <div className="h-3 bg-[#003080] rounded w-24"></div>
+            <div className="h-2 bg-[#003080] rounded w-16"></div>
           </div>
         </div>
       </div>
@@ -209,24 +227,67 @@ export function AccountIndicator() {
     return null;
   }
 
+  const syncModal = showSyncModal && (
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-gradient-to-b from-[#0B64F0] via-[#0448BC] to-[#023188] border-[3px] border-[#FFD200] rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+        <h3 className="text-base font-black text-[#FFD200] uppercase tracking-wide flex items-center gap-2">
+          <span>🔑</span> Restore with Sync Code
+        </h3>
+        <p className="text-xs font-semibold text-sky-100">
+          Enter your unique recovery code (e.g. <span className="font-mono text-[#FFD200]">LUDO-ABCD-EFGH-JKLM-NPQR</span>) from your previous device to restore your account.
+        </p>
+        <form onSubmit={handleRestoreAccount} className="space-y-3">
+          <input
+            type="text"
+            placeholder="LUDO-XXXX-XXXX-XXXX-XXXX"
+            value={restoreInput}
+            onChange={(e) => setRestoreInput(e.target.value)}
+            className="w-full px-3 py-2.5 bg-[#00245F] border-2 border-sky-400/50 rounded-xl text-sm font-mono font-black text-white text-center tracking-widest uppercase focus:outline-none focus:border-[#FFD200]"
+            maxLength={30}
+            autoFocus
+          />
+          {restoreError && (
+            <p className="text-xs font-bold text-rose-300 text-center">{restoreError}</p>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => { setShowSyncModal(false); setRestoreError(null); }}
+              className="flex-1 min-h-10 py-2 bg-[#003080] hover:bg-[#003B99] border border-sky-400/40 rounded-xl text-xs font-black text-sky-100 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={restoring}
+              className="flex-1 min-h-10 py-2 bg-gradient-to-r from-[#FFD200] to-[#FFA000] hover:brightness-110 text-[#072468] font-black rounded-xl text-xs border border-white transition-all cursor-pointer"
+            >
+              {restoring ? 'Restoring...' : 'Restore'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+
   // Not signed in / Guest state
   if (!user) {
     return (
-      <div className="w-full px-4 py-3 bg-gradient-to-r from-blue-900/40 via-indigo-900/40 to-slate-900/60 rounded-2xl border border-blue-500/30 shadow-lg text-slate-100">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-bold tracking-wide uppercase text-amber-300 flex items-center gap-1.5">
-            <span>💾</span> Save Progress & Stats
+      <div className="w-full px-3.5 py-2.5 bg-gradient-to-b from-[#0B64F0] via-[#0448BC] to-[#023188] rounded-2xl border-2 border-[#FFD200] shadow-lg text-white space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-black tracking-wide uppercase text-[#FFD200] flex items-center gap-1.5 drop-shadow">
+            <span>💾</span> Cloud Account Sync
           </span>
           <button
             onClick={() => setShowSyncModal(true)}
-            className="text-xs text-sky-300 hover:text-white underline cursor-pointer"
+            className="text-[11px] font-bold text-sky-200 hover:text-[#FFD200] underline cursor-pointer"
           >
             Have a Sync Code?
           </button>
         </div>
 
         {authError && (
-          <div className="p-2.5 rounded-xl bg-amber-950/70 border border-amber-500/50 text-amber-200 text-xs flex items-start justify-between gap-2">
+          <div className="p-2.5 rounded-xl bg-amber-950/80 border border-amber-400/60 text-amber-200 text-xs flex items-start justify-between gap-2">
             <span>⚠️ {authError}</span>
             <button
               onClick={() => setAuthError(null)}
@@ -239,21 +300,21 @@ export function AccountIndicator() {
         )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {/* GitHub Login (No CC / No billing needed) */}
+          {/* GitHub Login */}
           <button
             onClick={handleLoginWithGithub}
-            className="w-full px-3 py-2 bg-[#24292F] hover:bg-[#1a1f24] text-white rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow border border-slate-600 active:scale-95 cursor-pointer"
+            className="w-full px-3 py-2 bg-[#00245F] hover:bg-[#003080] text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow border border-sky-400/50 active:scale-95 cursor-pointer"
           >
-            <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 fill-[#FFD200]" viewBox="0 0 24 24">
               <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
             </svg>
             Sign in with GitHub
           </button>
 
-          {/* Google Login (Optional) */}
+          {/* Google Login */}
           <button
             onClick={handleLoginWithGoogle}
-            className="w-full px-3 py-2 bg-white hover:bg-slate-100 text-slate-800 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow border border-slate-300 active:scale-95 cursor-pointer"
+            className="w-full px-3 py-2 bg-white hover:bg-slate-100 text-[#072468] rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow border border-yellow-300 active:scale-95 cursor-pointer"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -265,116 +326,86 @@ export function AccountIndicator() {
           </button>
         </div>
 
-        {/* Restore modal */}
-        {showSyncModal && (
-          <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                🔑 Restore with Sync Code
-              </h3>
-              <p className="text-xs text-slate-300">
-                Enter your unique recovery code (e.g. <span className="font-mono text-amber-300">LUDO-ABCD-EFGH-JKLM-NPQR</span>) from your previous device to restore your account.
-              </p>
-              <form onSubmit={handleRestoreAccount} className="space-y-3">
-                <input
-                  type="text"
-                  placeholder="LUDO-XXXX-XXXX-XXXX-XXXX"
-                  value={restoreInput}
-                  onChange={(e) => setRestoreInput(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-xl text-sm font-mono text-center tracking-widest uppercase focus:outline-none focus:border-amber-400"
-                  maxLength={30}
-                  autoFocus
-                />
-                {restoreError && (
-                  <p className="text-xs text-red-400 text-center">{restoreError}</p>
-                )}
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setShowSyncModal(false); setRestoreError(null); }}
-                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-medium cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={restoring}
-                    className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition-colors cursor-pointer"
-                  >
-                    {restoring ? 'Restoring...' : 'Restore'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
+        {syncModal}
       </div>
     );
   }
 
+  const avatarToRender = user.avatarUrl || localProfile.avatarUrl;
+  const displayName = user.displayName === 'Arena Master' && localProfile.name !== 'Arena Master'
+    ? localProfile.name
+    : user.displayName;
+
   // Signed in state
   return (
     <div className="relative w-full">
-      <div className="w-full px-4 py-2.5 bg-slate-900/80 rounded-2xl border border-slate-700/60 shadow flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {user.avatarUrl ? (
-            <img src={user.avatarUrl} alt={`${user.displayName}'s profile`} className="w-9 h-9 rounded-xl object-cover shadow" />
-          ) : (
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-slate-950 font-black text-sm shadow">
-              {user.displayName.charAt(0).toUpperCase()}
-            </div>
-          )}
-          <div>
+      <div className="w-full px-3.5 py-2 bg-gradient-to-r from-[#0B64F0] via-[#0448BC] to-[#023188] rounded-2xl border-2 border-[#FFD200] shadow-lg flex items-center justify-between">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-amber-200 to-amber-500 p-0.5 shadow shrink-0">
+            {avatarToRender ? (
+              <img src={avatarToRender} alt={`${displayName}'s profile`} className="w-full h-full rounded-[10px] object-cover" />
+            ) : (
+              <div className="w-full h-full rounded-[10px] bg-[#0F2F7D] flex items-center justify-center text-lg">
+                {getProfileEmoji(localProfile)}
+              </div>
+            )}
+          </div>
+          <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="font-bold text-xs text-white">{user.displayName}</span>
+              <span className="font-black text-xs text-white truncate max-w-[125px]">{displayName}</span>
               {user.isGuest && (
-                <span className="text-[10px] px-1.5 py-0.2 bg-amber-500/20 text-amber-300 rounded font-semibold">
+                <span className="text-[9px] px-1.5 py-0.5 bg-[#FFD200] text-[#072468] rounded font-black uppercase tracking-tight">
                   Guest
                 </span>
               )}
               {user.hasGithub && (
-                <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 rounded font-semibold">
-                  GitHub
+                <span className="text-[9px] px-1.5 py-0.5 bg-emerald-400 text-slate-950 rounded font-black uppercase tracking-tight">
+                  GitHub ✓
+                </span>
+              )}
+              {user.hasGoogle && (
+                <span className="text-[9px] px-1.5 py-0.5 bg-sky-300 text-slate-950 rounded font-black uppercase tracking-tight">
+                  Google ✓
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-slate-400 font-medium">
-              Lv. {user.level} • {stats?.wins ?? 0} wins • {stats?.xp ?? 0} XP
+            <div className="text-[10px] text-sky-200 font-bold">
+              Lv. {Math.max(user.level, localProfile.level)} • {Math.max(stats?.wins ?? 0, localProfile.totalWins)} wins • {Math.max(stats?.xp ?? 0, localProfile.xp)} XP
             </div>
           </div>
         </div>
 
         <button
           onClick={() => setShowMenu(!showMenu)}
-          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-medium text-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
+          className="px-2.5 py-1.5 bg-[#002B7A] hover:bg-[#003B99] border border-[#FFD200]/80 rounded-xl text-xs font-black text-[#FFD200] transition-all flex items-center gap-1 cursor-pointer shadow shrink-0"
         >
           <span>Account</span>
-          <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          <svg className={`w-3.5 h-3.5 text-[#FFD200] transition-transform ${showMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
           </svg>
         </button>
       </div>
 
       {logoutError && (
-        <p className="text-xs text-red-400 mt-1 text-right" role="alert">{logoutError}</p>
+        <p className="text-xs text-rose-300 font-bold mt-1 text-right" role="alert">{logoutError}</p>
       )}
 
       {showMenu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)}></div>
-          <div className="absolute top-full right-0 mt-2 w-72 bg-slate-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-slate-700 z-50 overflow-hidden divide-y divide-slate-800">
+          <div className="absolute top-full right-0 mt-2 w-72 bg-gradient-to-b from-[#0847B8] to-[#021E5C] rounded-2xl shadow-2xl border-2 border-[#FFD200] z-50 overflow-hidden divide-y divide-sky-400/30">
             {/* Sync Code Box */}
-            <div className="p-3 bg-slate-800/40">
-              <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 mb-1">
+            <div className="p-3 bg-[#00245F]/70">
+              <div className="text-[10px] uppercase font-black tracking-wider text-sky-200 mb-1">
                 Your Sync Code (Use on any device)
               </div>
-              <div className="flex items-center justify-between bg-slate-950/80 px-2.5 py-1.5 rounded-lg border border-slate-700">
-                <span className="font-mono text-xs text-amber-300 font-bold select-all">
+              <div className="flex items-center justify-between bg-[#001845] px-2.5 py-1.5 rounded-xl border border-sky-400/40">
+                <span className="font-mono text-xs text-[#FFD200] font-black select-all">
                   {syncCode || 'Loading...'}
                 </span>
                 <button
                   onClick={handleCopySyncCode}
-                  className="text-[11px] px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold rounded transition-colors cursor-pointer"
+                  className="text-[10px] px-2 py-0.5 bg-[#FFD200] hover:brightness-110 text-[#072468] font-black rounded-md transition-all cursor-pointer"
                 >
                   {copied ? '✓ Copied' : 'Copy'}
                 </button>
@@ -386,38 +417,38 @@ export function AccountIndicator() {
               <div className="p-2 space-y-1">
                 <button
                   onClick={handleLoginWithGithub}
-                  className="w-full px-3 py-2 hover:bg-slate-800 rounded-xl text-left text-xs text-white flex items-center gap-2 cursor-pointer"
+                  className="w-full px-3 py-2 hover:bg-[#003080] rounded-xl text-left text-xs text-white flex items-center gap-2.5 cursor-pointer transition-colors"
                 >
                   <span className="text-base">🐙</span>
                   <div>
-                    <div className="font-semibold">Link GitHub Account</div>
-                    <div className="text-[10px] text-slate-400">1-click login, never lose stats</div>
+                    <div className="font-black text-[#FFD200]">Link GitHub Account</div>
+                    <div className="text-[10px] font-semibold text-sky-200">1-click login, never lose stats</div>
                   </div>
                 </button>
                 <button
                   onClick={handleLoginWithGoogle}
-                  className="w-full px-3 py-2 hover:bg-slate-800 rounded-xl text-left text-xs text-white flex items-center gap-2 cursor-pointer"
+                  className="w-full px-3 py-2 hover:bg-[#003080] rounded-xl text-left text-xs text-white flex items-center gap-2.5 cursor-pointer transition-colors"
                 >
                   <span className="text-base">🌐</span>
                   <div>
-                    <div className="font-semibold">Link Google Account</div>
-                    <div className="text-[10px] text-slate-400">Optional Google sign-in</div>
+                    <div className="font-black text-white">Link Google Account</div>
+                    <div className="text-[10px] font-semibold text-sky-200">Optional Google sign-in</div>
                   </div>
                 </button>
               </div>
             )}
 
             {/* Restore Another Account */}
-            <div className="p-1">
+            <div className="p-1.5 space-y-0.5">
               <button
                 onClick={() => { setShowMenu(false); setShowSyncModal(true); }}
-                className="w-full px-3 py-2 hover:bg-slate-800 rounded-xl text-left text-xs text-sky-300 flex items-center gap-2 cursor-pointer"
+                className="w-full px-3 py-2 hover:bg-[#003080] rounded-xl text-left text-xs font-bold text-sky-200 flex items-center gap-2 cursor-pointer transition-colors"
               >
                 <span>🔄</span> Switch / Restore with Code
               </button>
               <button
                 onClick={handleLogout}
-                className="w-full px-3 py-2 hover:bg-slate-800 rounded-xl text-left text-xs text-red-400 flex items-center gap-2 cursor-pointer"
+                className="w-full px-3 py-2 hover:bg-rose-950/60 rounded-xl text-left text-xs font-bold text-rose-300 flex items-center gap-2 cursor-pointer transition-colors"
               >
                 <span>🚪</span> Log Out
               </button>
@@ -425,6 +456,8 @@ export function AccountIndicator() {
           </div>
         </>
       )}
+
+      {syncModal}
     </div>
   );
 }

@@ -18,7 +18,13 @@ import {
   GameState,
   PlayerColor,
 } from '../../engine/types';
-import { recordMatchOutcomeResilient } from '../../storage/profileStore';
+import {
+  getProfileEmoji,
+  loadCoins,
+  loadProfile,
+  loadSettings,
+  recordMatchOutcomeResilient,
+} from '../../storage/profileStore';
 import { useGameTimer } from '../../hooks/useGameTimer';
 import type { OnlineRoomConnection, RoomEvent } from '../../network/onlineClient';
 import { AnimatingCaptureInfo, AnimatingTokenInfo, LudoBoard } from '../board/LudoBoard';
@@ -97,6 +103,18 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
   const [gameState, setGameState] = useState<GameState>(() =>
     onlineSession?.currentGameState ?? createLocalGame(initialMode, humanColor, botPersonalities, rules)
   );
+  const [profile] = useState(loadProfile);
+  const [coins, setCoins] = useState(loadCoins);
+  const [fastAnimations] = useState(() => loadSettings().fastAnimations);
+
+  const rollMs = fastAnimations ? 260 : ROLL_MS;
+  const stepMs = fastAnimations ? 120 : STEP_MS;
+  const landPauseMs = fastAnimations ? 70 : LAND_PAUSE_MS;
+  const captureAnimationMs = fastAnimations ? 140 : CAPTURE_ANIMATION_MS;
+  const botRollDelayMs = fastAnimations ? 280 : BOT_ROLL_DELAY_MS;
+  const botMoveDelayMs = fastAnimations ? 300 : BOT_MOVE_DELAY_MS;
+  const autoPassMs = fastAnimations ? 480 : AUTO_PASS_MS;
+  const autoMoveDelayMs = fastAnimations ? 240 : AUTO_MOVE_DELAY_MS;
 
   const [autoOrient, setAutoOrient] = useState(true);
   const [boardRotation, setBoardRotation] = useState(
@@ -143,7 +161,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
             capture.moveId !== move.id || capture.color !== capturedToken.color || capture.tokenIndex !== capturedToken.tokenIndex
           ));
           finishOnlineMove(move, captureIndex + 1);
-        }, CAPTURE_ANIMATION_MS);
+        }, captureAnimationMs);
         return;
       }
 
@@ -171,14 +189,14 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
       setAnimatingToken({ color: move.color, tokenIndex: move.tokenIndex, currentStep, isHopping: true });
       const animateNextStep = () => {
         if (currentStep >= move.toStep) {
-          startTimer(() => finishOnlineMove(move), LAND_PAUSE_MS);
+          startTimer(() => finishOnlineMove(move), landPauseMs);
           return;
         }
         currentStep += 1;
         setAnimatingToken({ color: move.color, tokenIndex: move.tokenIndex, currentStep, isHopping: true });
-        startTimer(animateNextStep, STEP_MS);
+        startTimer(animateNextStep, stepMs);
       };
-      startTimer(animateNextStep, STEP_MS);
+      startTimer(animateNextStep, stepMs);
     };
 
     return onlineSession.subscribe((event: RoomEvent) => {
@@ -318,7 +336,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         return result.ok ? result.state : prev;
       });
       setIsRolling(false);
-    }, ROLL_MS);
+    }, rollMs);
   };
 
   // Hop a token square by square, then commit the move to the engine.
@@ -360,7 +378,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         index += 1;
         setAnimatingToken({ color, tokenIndex, currentStep, isHopping: true });
         sound.playMove();
-        startTimer(hop, STEP_MS);
+        startTimer(hop, stepMs);
         return;
       }
 
@@ -376,7 +394,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         });
         setAnimatingToken(null);
         movingRef.current = false;
-      }, LAND_PAUSE_MS);
+      }, landPauseMs);
     };
 
     hop();
@@ -409,14 +427,14 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
 
     let botDecisionTimer: number | undefined;
     if (gameState.phase === 'rolling') {
-      botDecisionTimer = startTimer(performRoll, BOT_ROLL_DELAY_MS);
+      botDecisionTimer = startTimer(performRoll, botRollDelayMs);
     } else if (gameState.phase === 'moving' && gameState.legalMoves.length > 0) {
       botDecisionTimer = startTimer(() => {
         const s = stateRef.current;
         const turn = s.players.find((p) => p.color === s.currentTurnColor)!;
         const chosen = chooseBotMove(s.legalMoves, turn, s.players, s.rules, s.isTeamMode, createSeededRandom(`${s.seed}:${s.rngState}:${s.nextEventId}:${turn.color}`));
         if (chosen) playMove(chosen.tokenIndex, chosen.tokenColor);
-      }, BOT_MOVE_DELAY_MS);
+      }, botMoveDelayMs);
     }
 
     return () => {
@@ -445,7 +463,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
 
     const autoMoveTimer = startTimer(
       () => playMove(automaticMove.tokenIndex, automaticMove.tokenColor),
-      AUTO_MOVE_DELAY_MS
+      autoMoveDelayMs
     );
     return () => cancelTimer(autoMoveTimer);
   }, [gameState, humanControlsTurn, animatingToken, isRolling, onlineSession]);
@@ -461,7 +479,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         const result = passTurn(prev);
         return result.ok ? result.state : prev;
       });
-    }, AUTO_PASS_MS);
+    }, autoPassMs);
 
     return () => cancelTimer(autoPassTimer);
   }, [gameState.phase, gameState.legalMoves.length, animatingToken, onlineSession]);
@@ -505,6 +523,7 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
       sixesRolled: sixesRolledRef.current,
       durationSeconds: Math.max(10, Math.round((Date.now() - matchStartRef.current) / 1000)),
     });
+    setCoins(loadCoins());
   }, [gameState, onlineSession]);
 
   const handleRematch = () => {
@@ -569,21 +588,19 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
     const isCurrentHuman = onlineSession
       ? player.color === onlineSession.localColor
       : !player.isBot;
+    const isLocalUserSeat = onlineSession
+      ? player.color === onlineSession.localColor
+      : !player.isBot && (gameState.mode !== 'pass_and_play' || player.color === humanColor);
 
-    let coins = 1000;
-    let gems: number | undefined = undefined;
-    if (color === 'red') coins = 650;
-    else if (color === 'green') coins = 1162;
-    else if (color === 'yellow') coins = 1600;
-    else if (color === 'blue') {
-      coins = 1000;
-      if (position === 'bottom-left' || position === 'bottom-right') gems = 50;
-    }
+    const podPlayer =
+      isLocalUserSeat && (!onlineSession || player.name === 'You') && profile.name
+        ? { ...player, name: profile.name }
+        : player;
 
     return (
       <CornerPlayerPod
         key={color}
-        player={player}
+        player={podPlayer}
         isActive={isPlayerActive}
         diceValue={gameState.diceValue}
         isRolling={isRolling && isPlayerActive}
@@ -598,10 +615,10 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
         onDiceClickDuringMove={handleDiceTap}
         consecutiveSixes={isPlayerActive ? gameState.consecutiveSixes : 0}
         position={position}
-        coins={coins}
-        gems={gems}
-        isLocalPlayer={Boolean(onlineSession && player.color === onlineSession.localColor)}
+        isLocalPlayer={isLocalUserSeat}
         teamLabel={gameState.isTeamMode && player.teamId ? (player.teamId === 'team_A' ? 'Team A' : 'Team B') : undefined}
+        customAvatarUrl={isLocalUserSeat ? profile.avatarUrl : undefined}
+        customAvatarIcon={isLocalUserSeat ? getProfileEmoji(profile) : undefined}
       />
     );
   };
@@ -628,10 +645,15 @@ export const BoardGameScreen: React.FC<BoardGameScreenProps> = ({
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-950/70 border border-sky-400/40 text-xs font-mono font-bold text-sky-300 shadow">
-            <span>💎</span>
-            <span>50</span>
+          <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#003B99] border border-[#FFD200]/70 text-xs font-mono font-black text-white shadow">
+            <span>🪙</span>
+            <span>{coins.toLocaleString()}</span>
           </div>
+          {fastAnimations && (
+            <span className="hidden sm:inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-amber-400/20 border border-amber-400/60 text-[10px] font-black text-[#FFD200]">
+              ⚡ TURBO
+            </span>
+          )}
         </div>
 
         <div className="flex flex-col items-center">

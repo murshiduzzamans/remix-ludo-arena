@@ -14,6 +14,7 @@ import React, { useState } from 'react';
 import { sound } from '../../audio/soundEffects';
 import { COLOR_ORDER, COLOR_THEMES } from '../../engine/constants';
 import { BotPersonality, GameMode, GameRules, PlayerColor } from '../../engine/types';
+import { loadCoins } from '../../storage/profileStore';
 
 interface SoloSetupScreenProps {
   onStartMatch: (
@@ -34,6 +35,7 @@ export const SoloSetupScreen: React.FC<SoloSetupScreenProps> = ({
   const [selectedMode, setSelectedMode] = useState<GameMode>('solo_bots');
   const [selectedColor, setSelectedColor] = useState<PlayerColor>('red');
   const [rules, setRules] = useState<GameRules>(initialRules);
+  const [coins] = useState<number>(loadCoins);
 
   const [personalities, setPersonalities] = useState<Record<PlayerColor, BotPersonality>>({
     red: 'balanced',
@@ -85,8 +87,8 @@ export const SoloSetupScreen: React.FC<SoloSetupScreenProps> = ({
         `,
       }}
     >
-      {/* 1. Mobile Top Bar (Matching Lobby Header) */}
-      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg px-3 py-1.5 flex items-center justify-between z-20">
+      {/* 1. Mobile Top Bar (Matching Lobby Header, with right padding reserved for TopNavBar) */}
+      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg pl-3 pr-16 py-1.5 flex items-center justify-between z-20">
         <button
           onClick={onBack}
           className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[#003B99] border border-sky-400/50 shadow text-white hover:brightness-110 active:scale-95 transition-transform cursor-pointer"
@@ -104,7 +106,7 @@ export const SoloSetupScreen: React.FC<SoloSetupScreenProps> = ({
 
         {/* Coins Pill */}
         <div className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#003B99] border border-sky-400/50 shadow-inner font-mono font-black text-xs text-white">
-          <span>5,000</span>
+          <span>{coins.toLocaleString()}</span>
           <span>🪙</span>
         </div>
       </header>

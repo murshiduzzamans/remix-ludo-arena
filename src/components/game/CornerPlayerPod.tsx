@@ -21,6 +21,8 @@ interface CornerPlayerPodProps {
   onDiceClickDuringMove?: () => void;
   isLocalPlayer?: boolean;
   teamLabel?: string;
+  customAvatarUrl?: string | null;
+  customAvatarIcon?: string;
 }
 
 /**
@@ -85,11 +87,11 @@ export const CornerPlayerPod: React.FC<CornerPlayerPodProps> = ({
   onRoll,
   consecutiveSixes = 0,
   position,
-  coins,
-  gems,
   onDiceClickDuringMove,
   isLocalPlayer = false,
   teamLabel,
+  customAvatarUrl,
+  customAvatarIcon,
 }) => {
   const theme = COLOR_THEMES[player.color];
   const avatar = AVATAR_DATA[player.color];
@@ -113,7 +115,7 @@ export const CornerPlayerPod: React.FC<CornerPlayerPodProps> = ({
   // Before a roll there is no value yet, so the die shows blank instead of a fake 6
   const showBlankFace = !isRolling && diceValue === null;
   const displayDice = diceValue ?? 1;
-  const coinCount = coins ?? avatar.defaultCoins;
+  const displayName = shortPlayerName(player.name) || avatar.defaultName;
 
   const renderDots = (value: number) => (
     <div className="dice-pips">
@@ -205,37 +207,51 @@ export const CornerPlayerPod: React.FC<CornerPlayerPodProps> = ({
     </div>
   );
 
-  // 2. The Avatar Compartment (Framed Character + Name Banner + Flag)
+  // 2. The Avatar Compartment (Clean framed character or uploaded profile picture)
   const avatarCompartment = (
     <div className="relative w-12 h-12 sm:w-14 sm:h-14 shrink-0 rounded-xl overflow-hidden bg-gradient-to-b from-slate-900 to-[#072468] border border-sky-400/50 shadow-inner flex flex-col items-center justify-center">
-      {/* Flag / Header Tag at top */}
-      {avatar.flag && (
-        <span className="absolute top-0.5 inset-x-0 text-[8px] sm:text-[9px] font-bold text-center z-10 leading-none text-sky-200 truncate px-0.5 pointer-events-none">
-          {avatar.flag}
-        </span>
+      {customAvatarUrl ? (
+        <img
+          src={customAvatarUrl}
+          alt={displayName}
+          className="w-full h-full object-cover pointer-events-none"
+        />
+      ) : (
+        <div className="text-2xl sm:text-3xl select-none pointer-events-none drop-shadow">
+          {customAvatarIcon || avatar.icon}
+        </div>
       )}
 
-      {/* 3D Character Avatar Art */}
-      <div className="text-xl sm:text-2xl select-none mt-1 pointer-events-none">{avatar.icon}</div>
+      {/* Subtle player color accent strip at bottom */}
+      <div
+        className="absolute bottom-0 inset-x-0 h-1.5 pointer-events-none"
+        style={{ backgroundColor: theme.primary }}
+      />
+    </div>
+  );
 
-      {/* Name Banner at bottom */}
-      <div className="absolute bottom-0 inset-x-0 bg-[#004ECC] text-[8px] sm:text-[9px] font-extrabold text-white text-center py-0.5 truncate px-0.5 border-t border-sky-400/60 shadow pointer-events-none">
-        {shortPlayerName(player.name) || avatar.defaultName}
-      </div>
+  const matchTelemetryBadge = (
+    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#002870]/90 border border-sky-400/35 text-[9px] sm:text-[10px] font-mono font-black text-sky-100 shadow-sm">
+      <span title="Tokens Home" className="flex items-center gap-0.5 text-[#FFD200]">
+        <span>🏁</span>
+        <span>{player.tokensFinished}/4</span>
+      </span>
+      <span className="text-sky-400/50">·</span>
+      <span title="Captures" className="flex items-center gap-0.5 text-sky-200">
+        <span>⚡</span>
+        <span>{player.captures}</span>
+      </span>
     </div>
   );
 
   return (
     <div className="flex flex-col items-center select-none">
-      {/* Coin counter badge above pod (for top row) */}
+      {/* Live match telemetry above pod (for top row) */}
       {(position === 'top-left' || position === 'top-right') && (
-        <div className="flex items-center gap-1 text-[10px] sm:text-xs font-black font-mono text-[#FFD200] drop-shadow mb-0.5">
-          <span>🪙</span>
-          <span>{coinCount.toLocaleString()}</span>
-        </div>
+        <div className="mb-1">{matchTelemetryBadge}</div>
       )}
 
-      {/* The Iconic Blue Pod Frame with Gold Trim matching screenshot 100% */}
+      {/* The Iconic Blue Pod Frame with Gold Trim */}
       <div
         className={`relative p-1 rounded-2xl transition-all duration-200 border-[2.5px] ${
           isActive
@@ -270,30 +286,26 @@ export const CornerPlayerPod: React.FC<CornerPlayerPodProps> = ({
         )}
       </div>
 
-      <div className={`mt-1 flex ${teamLabel ? 'max-w-[156px] bg-slate-950/90 px-2' : 'max-w-[132px] bg-slate-950/75 px-1.5'} flex-col items-center rounded-lg border border-sky-200/30 py-1 text-center shadow-sm`}>
+      {/* Single clean nameplate below pod (no duplicate name) */}
+      <div className={`mt-1 flex ${teamLabel ? 'max-w-[156px] bg-slate-950/90 px-2' : 'max-w-[136px] bg-slate-950/80 px-2'} flex-col items-center rounded-lg border border-sky-200/30 py-1 text-center shadow-sm`}>
         <div className="flex max-w-full items-center justify-center gap-1">
-          <span className={`${teamLabel ? 'max-w-[112px]' : 'max-w-[92px]'} truncate text-[10px] font-black leading-tight text-white`}>{player.name}</span>
-          {isLocalPlayer && <span className="shrink-0 rounded bg-amber-400 px-1 py-0.5 text-[8px] font-black leading-none text-slate-950">YOU</span>}
+          <span className={`${teamLabel ? 'max-w-[112px]' : 'max-w-[96px]'} truncate text-[10px] font-black leading-tight text-white`}>
+            {displayName}
+          </span>
+          {isLocalPlayer && (
+            <span className="shrink-0 rounded bg-[#FFD200] px-1 py-0.5 text-[8px] font-black leading-none text-slate-950">
+              YOU
+            </span>
+          )}
         </div>
         <span className={`text-[9px] font-bold uppercase leading-tight ${teamLabel ? 'text-sky-100' : 'text-sky-200'}`}>
-          {teamLabel ? `${theme.name} player · ${teamLabel}` : theme.name}
+          {teamLabel ? `${theme.name} · ${teamLabel}` : player.isBot ? `${theme.name} Bot` : theme.name}
         </span>
       </div>
 
-      {/* Coin & Gem counters below pod (for bottom row) */}
+      {/* Live match telemetry below pod (for bottom row) */}
       {(position === 'bottom-left' || position === 'bottom-right') && (
-        <div className="flex flex-col items-center mt-0.5">
-          <div className="flex items-center gap-1 text-[10px] sm:text-xs font-black font-mono text-[#FFD200] drop-shadow">
-            <span>🪙</span>
-            <span>{coinCount.toLocaleString()}</span>
-          </div>
-          {position === 'bottom-left' && gems !== undefined && (
-            <div className="flex items-center gap-1 text-[9px] font-bold font-mono text-sky-300">
-              <span>💎</span>
-              <span>{gems}</span>
-            </div>
-          )}
-        </div>
+        <div className="mt-1">{matchTelemetryBadge}</div>
       )}
     </div>
   );

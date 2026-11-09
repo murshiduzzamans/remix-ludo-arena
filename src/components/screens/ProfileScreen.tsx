@@ -13,6 +13,10 @@ import {
 import React, { useState, useEffect } from 'react';
 import { sound } from '../../audio/soundEffects';
 import {
+  AVATAR_EMOJI_OPTIONS,
+  getProfileEmoji,
+  getRankTitle,
+  loadCoins,
   loadMatchHistory,
   loadProfile,
   MatchRecord,
@@ -28,13 +32,14 @@ interface ProfileScreenProps {
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLeaderboard }) => {
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
+  const [coins] = useState<number>(loadCoins);
   const [history] = useState<MatchRecord[]>(loadMatchHistory);
   const [isEditing, setIsEditing] = useState(false);
   const [nameInput, setNameInput] = useState(profile.name);
   const [showAvatarUploader, setShowAvatarUploader] = useState(false);
-  const [selectedAvatar, setSelectedAvatar] = useState('👩');
+  const [selectedAvatar, setSelectedAvatar] = useState(() => getProfileEmoji(profile));
   const [avatarError, setAvatarError] = useState<string | null>(null);
-  const avatarOptions = ['👩', '👦', '🦁', '🏎️', '👑', '🦊', '🐯', '🥷'];
+  const avatarOptions = AVATAR_EMOJI_OPTIONS;
 
   useEffect(() => {
     const refreshServerProfile = async () => {
@@ -71,6 +76,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLead
     sound.triggerHaptic(20);
     sound.playMove();
     setSelectedAvatar(av);
+    const updated = { ...profile, avatarSeed: av };
+    setProfile(updated);
+    saveProfile(updated);
   };
 
   const handleAvatarUpload = async (base64Image: string) => {
@@ -158,8 +166,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLead
         `,
       }}
     >
-      {/* 1. Mobile Top Bar (Matching Lobby Header) */}
-      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg px-3 py-1.5 flex items-center justify-between z-20">
+      {/* 1. Mobile Top Bar (Matching Lobby Header, with right padding reserved for TopNavBar) */}
+      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg pl-3 pr-16 py-1.5 flex items-center justify-between z-20">
         <button
           onClick={onBack}
           className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[#003B99] border border-sky-400/50 shadow text-white hover:brightness-110 active:scale-95 transition-transform cursor-pointer"
@@ -177,7 +185,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLead
 
         {/* Coins Pill */}
         <div className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#003B99] border border-sky-400/50 shadow-inner font-mono font-black text-xs text-white">
-          <span>5,000</span>
+          <span>{coins.toLocaleString()}</span>
           <span>🪙</span>
         </div>
       </header>
@@ -240,7 +248,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLead
               )}
 
               <span className="text-[10px] font-bold text-sky-200 block">
-                Rank: Arena Grandmaster 👑
+                Rank: {getRankTitle(profile.level, profile.totalWins)}
               </span>
 
               {/* XP Progress Bar */}

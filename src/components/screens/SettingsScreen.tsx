@@ -13,6 +13,7 @@ import React, { useState } from 'react';
 import { sound } from '../../audio/soundEffects';
 import {
   AppSettings,
+  loadCoins,
   loadSettings,
   saveSettings,
 } from '../../storage/profileStore';
@@ -23,7 +24,13 @@ interface SettingsScreenProps {
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [coins] = useState<number>(loadCoins);
   const [savedToast, setSavedToast] = useState(false);
+
+  const flashSaved = () => {
+    setSavedToast(true);
+    setTimeout(() => setSavedToast(false), 1400);
+  };
 
   const handleToggleSound = () => {
     const nextVal = !settings.soundEnabled;
@@ -33,6 +40,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
     setSettings(updated);
     saveSettings(updated);
     if (nextVal) sound.playMove();
+    flashSaved();
   };
 
   const handleVolumeChange = (vol: number) => {
@@ -47,6 +55,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
     setSettings(updated);
     saveSettings(updated);
     sound.setHapticsEnabled(updated.hapticFeedback);
+    flashSaved();
   };
 
   const handleToggleTurbo = () => {
@@ -55,9 +64,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
     const updated = { ...settings, fastAnimations: !settings.fastAnimations };
     setSettings(updated);
     saveSettings(updated);
+    flashSaved();
   };
-
-
 
   return (
     <div
@@ -70,8 +78,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
         `,
       }}
     >
-      {/* 1. Mobile Top Bar (Matching Lobby Header) */}
-      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg px-3 py-1.5 flex items-center justify-between z-20">
+      {/* 1. Mobile Top Bar (Matching Lobby Header, with right padding reserved for TopNavBar) */}
+      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg pl-3 pr-16 py-1.5 flex items-center justify-between z-20">
         <button
           onClick={onBack}
           className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[#003B99] border border-sky-400/50 shadow text-white hover:brightness-110 active:scale-95 transition-transform cursor-pointer"
@@ -89,7 +97,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
 
         {/* Coins Pill */}
         <div className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#003B99] border border-sky-400/50 shadow-inner font-mono font-black text-xs text-white">
-          <span>5,000</span>
+          <span>{coins.toLocaleString()}</span>
           <span>🪙</span>
         </div>
       </header>

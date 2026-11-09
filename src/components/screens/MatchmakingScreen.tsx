@@ -10,8 +10,9 @@ import {
   Play,
   Wifi,
 } from 'lucide-react';
-import React from 'react';
+import React, { useState } from 'react';
 import { sound } from '../../audio/soundEffects';
+import { getProfileEmoji, loadCoins, loadProfile } from '../../storage/profileStore';
 
 interface MatchmakingScreenProps {
   onCancel: () => void;
@@ -22,16 +23,19 @@ export const MatchmakingScreen: React.FC<MatchmakingScreenProps> = ({
   onCancel,
   onEnterMatch,
 }) => {
+  const [profile] = useState(loadProfile);
+  const [coins] = useState(loadCoins);
+
   const handleCancelClick = () => {
     sound.triggerHaptic(15);
     onCancel();
   };
 
   const slots = [
-    { color: '#E52521', name: 'You (Host)', avatar: '👩', ready: true },
-    { color: '#00A651', name: 'Sample player', avatar: '🦁', ready: true },
-    { color: '#FFC200', name: 'Sample player', avatar: '🏎️', ready: true },
-    { color: '#0088FF', name: 'Sample player', avatar: '🐯', ready: true },
+    { color: '#E52521', name: `${profile.name || 'You'} (Host)`, avatar: getProfileEmoji(profile), avatarUrl: profile.avatarUrl, ready: true },
+    { color: '#00A651', name: 'Sample player', avatar: '🦁', avatarUrl: null, ready: true },
+    { color: '#FFC200', name: 'Sample player', avatar: '🏎️', avatarUrl: null, ready: true },
+    { color: '#0088FF', name: 'Sample player', avatar: '🐯', avatarUrl: null, ready: true },
   ];
 
   return (
@@ -46,7 +50,7 @@ export const MatchmakingScreen: React.FC<MatchmakingScreenProps> = ({
       }}
     >
       {/* 1. Mobile Top Bar (Matching Lobby Header) */}
-      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg px-3 py-1.5 flex items-center justify-between z-20">
+      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg pl-3 pr-16 py-1.5 flex items-center justify-between z-20">
         <button
           onClick={handleCancelClick}
           className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[#003B99] border border-sky-400/50 shadow text-white hover:brightness-110 active:scale-95 transition-transform cursor-pointer"
@@ -63,8 +67,8 @@ export const MatchmakingScreen: React.FC<MatchmakingScreenProps> = ({
         </div>
 
         {/* Coins Pill */}
-        <div className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#003B99] border border-sky-400/50 shadow-inner font-mono font-black text-xs text-white">
-          <span>5,000</span>
+        <div className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#003B99] border border-sky-400/50 shadow-inner font-mono font-black text-xs text-white">
+          <span>{coins.toLocaleString()}</span>
           <span>🪙</span>
         </div>
 
@@ -133,10 +137,16 @@ export const MatchmakingScreen: React.FC<MatchmakingScreenProps> = ({
               >
                 <div className="flex items-center gap-2">
                   <div
-                    className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm text-white border-2 border-white shadow"
+                    className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center font-bold text-sm text-white border-2 border-white shadow"
                     style={{ backgroundColor: slot.color }}
                   >
-                    {slot.avatar ? slot.avatar : <Loader2 className="w-4 h-4 text-sky-300 animate-spin" />}
+                    {slot.avatarUrl ? (
+                      <img src={slot.avatarUrl} alt={slot.name} className="w-full h-full object-cover" />
+                    ) : slot.avatar ? (
+                      slot.avatar
+                    ) : (
+                      <Loader2 className="w-4 h-4 text-sky-300 animate-spin" />
+                    )}
                   </div>
                   <div>
                     <span className="text-xs font-black text-white truncate max-w-[90px] block">

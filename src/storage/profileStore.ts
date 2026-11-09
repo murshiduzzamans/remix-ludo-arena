@@ -44,9 +44,55 @@ export interface AppSettings {
 const PROFILE_KEY = 'ludo_arena_profile_v1';
 const HISTORY_KEY = 'ludo_arena_history_v1';
 const SETTINGS_KEY = 'ludo_arena_settings_v1';
+const COINS_KEY = 'ludo_arena_coins_v1';
 const HAPTIC_DEFAULT_MIGRATION_KEY = 'ludo_arena_haptics_default_off_v1';
 const IDEMPOTENCY_KEY = 'ludo_arena_idempotency_v1';
 const RESULT_STATE_KEY = 'ludo_arena_result_state_v2';
+
+export const DEFAULT_COINS = 5000;
+export const AVATAR_EMOJI_OPTIONS = ['👩', '👦', '🦁', '🏎️', '👑', '🦊', '🐯', '🥷'] as const;
+
+export function getProfileEmoji(profile: Pick<UserProfile, 'avatarSeed'>): string {
+  if (profile.avatarSeed && (AVATAR_EMOJI_OPTIONS as readonly string[]).includes(profile.avatarSeed)) {
+    return profile.avatarSeed;
+  }
+  return '👩';
+}
+
+export function getRankTitle(level: number, wins: number): string {
+  if (level >= 10 || wins >= 25) return 'Arena Grandmaster 👑';
+  if (level >= 6 || wins >= 12) return 'Diamond Champion 💎';
+  if (level >= 4 || wins >= 6) return 'Gold Tactician 🏆';
+  if (level >= 2 || wins >= 2) return 'Silver Contender ⚔️';
+  return 'Arena Contender 👑';
+}
+
+export function loadCoins(): number {
+  if (typeof window === 'undefined') return DEFAULT_COINS;
+  try {
+    const raw = localStorage.getItem(COINS_KEY);
+    if (!raw) return DEFAULT_COINS;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_COINS;
+    return Math.floor(parsed);
+  } catch {
+    return DEFAULT_COINS;
+  }
+}
+
+export function saveCoins(coins: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const safeCoins = Math.max(0, Math.floor(Number.isFinite(coins) ? coins : DEFAULT_COINS));
+    localStorage.setItem(COINS_KEY, String(safeCoins));
+  } catch {}
+}
+
+export function addCoins(delta: number): number {
+  const next = Math.max(0, loadCoins() + Math.floor(delta));
+  saveCoins(next);
+  return next;
+}
 
 export interface IdempotencyEntry {
   key: string;
@@ -470,6 +516,7 @@ export function recordMatchOutcome(record: MatchRecord & { matchId?: string }): 
     // Mirror the updated profile so the fallback PROFILE_KEY snapshot never lags
     // behind matches recorded through the result ledger.
     try { localStorage.setItem(PROFILE_KEY, JSON.stringify(updatedProfile)); } catch {}
+    addCoins(record.outcome === 'victory' ? 500 : 150);
   } catch {}
 }
 

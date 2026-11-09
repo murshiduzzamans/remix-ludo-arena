@@ -19,7 +19,7 @@ import {
 import React, { useState } from 'react';
 import { sound } from '../../audio/soundEffects';
 import { GameMode } from '../../engine/types';
-import { loadProfile, saveProfile } from '../../storage/profileStore';
+import { addCoins, getProfileEmoji, loadCoins, loadProfile } from '../../storage/profileStore';
 import { usePWAInstall } from '../pwa/usePWAInstall';
 import { AccountIndicator } from '../accounts/AccountIndicator';
 
@@ -46,7 +46,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   const [copiedShare, setCopiedShare] = useState(false);
   const [showCoinsReward, setShowCoinsReward] = useState(false);
   const [showRateToast, setShowRateToast] = useState(false);
-  const [coinsCount, setCoinsCount] = useState(5000);
+  const [coinsCount, setCoinsCount] = useState(() => loadCoins());
   const { isInstallable, install } = usePWAInstall();
 
   // Sound & Haptic on card press
@@ -60,7 +60,8 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   const handleAddMoreCoins = () => {
     sound.playHomeFinish();
     sound.triggerHaptic([30, 40, 50]);
-    setCoinsCount((c) => c + 500);
+    const nextCoins = addCoins(500);
+    setCoinsCount(nextCoins);
     setShowCoinsReward(true);
     setTimeout(() => setShowCoinsReward(false), 2000);
   };
@@ -94,8 +95,8 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
         `,
       }}
     >
-      {/* 1. Top Profile Bar (matching screenshot) */}
-      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg px-3 py-1.5 flex items-center justify-between z-20">
+      {/* 1. Top Profile Bar (matching screenshot, with right padding reserved for TopNavBar) */}
+      <header className="w-full bg-gradient-to-r from-[#0052CC] via-[#0066FF] to-[#0052CC] border-b-2 border-[#FFD200] shadow-lg pl-3 pr-16 py-1.5 flex items-center justify-between z-20">
         <div className="flex items-center gap-2">
           {/* Framed Avatar with Edit Icon */}
           <div
@@ -104,7 +105,15 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           >
             <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-b from-amber-200 to-amber-500 p-0.5 shadow-md">
               <div className="w-full h-full rounded-lg bg-[#0F2F7D] overflow-hidden flex items-center justify-center text-xl">
-                👩
+                {profile.avatarUrl ? (
+                  <img
+                    src={profile.avatarUrl}
+                    alt={`${profile.name}'s avatar`}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  getProfileEmoji(profile)
+                )}
               </div>
             </div>
             {/* Yellow Pencil Edit Icon */}
@@ -120,7 +129,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           >
             <Globe className="w-3.5 h-3.5 text-sky-300" />
             <span className="text-xs sm:text-sm font-black text-white tracking-wide truncate max-w-[100px] sm:max-w-[140px]">
-              {profile.name || 'Divya'}
+              {profile.name || 'Arena Master'}
             </span>
           </div>
         </div>
@@ -159,7 +168,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
       {/* Main Container constrained to mobile phone canvas */}
       <div className="w-full max-w-[420px] mx-auto px-4 flex-1 flex flex-col justify-between py-2 space-y-3">
         {/* Account & Sync Status */}
-        <AccountIndicator />
+        <AccountIndicator onProfileSync={() => setProfile(loadProfile())} />
 
         {/* 2. Hero Logo & Isometric 3D Board Illustration */}
         <div className="flex flex-col items-center justify-center pt-1 select-none">
