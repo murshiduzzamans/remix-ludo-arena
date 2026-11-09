@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "remix-ludo-arena",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -16,10 +16,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "db:migrate:staging": "bash ./scripts/migrate-staging.sh",
-    "db:migrate:production": "bash ./scripts/migrate-production.sh",
-    "db:backup:staging": "bash ./scripts/backup-d1.sh staging",
-    "db:backup:production": "bash ./scripts/backup-d1.sh production"
+    "db:migrate:staging": "node scripts/migrate.js staging",
+    "db:migrate:production": "node scripts/migrate.js production",
+    "db:backup:staging": "node scripts/backup.js staging",
+    "db:backup:production": "node scripts/backup.js production"
   },
   "dependencies": {
     "@cloudflare/realtimekit": "^2.0.4",

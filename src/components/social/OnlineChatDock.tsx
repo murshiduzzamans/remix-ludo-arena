@@ -145,6 +145,17 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
   }, [isOpen]);
 
   useEffect(() => {
+    return () => {
+      voiceGenerationRef.current += 1;
+      voiceStartingRef.current = false;
+      voiceRequestedRef.current = false;
+      const meeting = realtimeKitRef.current;
+      realtimeKitRef.current = null;
+      if (meeting) void meeting.leave().catch(() => console.warn('RealtimeKit leave failed during component cleanup.'));
+    };
+  }, []);
+
+  useEffect(() => {
     return connection.subscribe((event: RoomEvent) => {
       if (event.type === 'chat_history') {
         setMessages(event.messages.slice(-50));
@@ -277,11 +288,23 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
     shouldAutoScrollRef.current = true;
   };
 
-  const joinVoice = () => {
+  const joinVoice = async () => {
     voiceRequestedRef.current = true;
     setVoiceError('');
     setVoiceStarting(true);
-    connection.joinVoice();
+    let microphoneGranted = false;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      microphoneGranted = true;
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      const name = error instanceof DOMException ? error.name : '';
+      setVoiceError(name === 'NotAllowedError'
+        ? 'Microphone access was denied.'
+        : 'Microphone is unavailable in this browser.');
+    }
+    connection.joinVoice(microphoneGranted);
+    setVoiceStarting(false);
   };
 
   const toggleMicrophone = async () => {
@@ -328,7 +351,7 @@ export const OnlineChatDock: React.FC<OnlineChatDockProps> = ({ connection, room
           {!voiceJoined ? (
             <button
               type="button"
-              onClick={joinVoice}
+              onClick={() => void joinVoice()}
               disabled={voiceStarting || room.voiceEnabled === false || !voiceAvailable}
               className="flex min-h-11 items-center gap-2 rounded-xl border border-emerald-300/50 bg-emerald-950/70 px-3 text-xs font-bold text-emerald-100 disabled:opacity-50"
               aria-label={voiceStarting ? 'Connecting to room voice' : voiceAvailable ? 'Join room voice' : 'Voice unavailable'}

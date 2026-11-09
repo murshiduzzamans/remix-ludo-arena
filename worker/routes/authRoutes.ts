@@ -131,7 +131,7 @@ export async function handleGoogleAuthStart(request: Request, env: Env): Promise
   // Check for in-app browser
   const userAgent = request.headers.get('User-Agent') ?? '';
   if (isInAppBrowser(userAgent)) {
-    const response = new Response(
+    return new Response(
       `<!DOCTYPE html>
 <html>
 <head><title>Open in Browser</title></head>
@@ -142,7 +142,7 @@ export async function handleGoogleAuthStart(request: Request, env: Env): Promise
   <button onclick="navigator.clipboard.writeText(window.location.origin).then(() => alert('Link copied!'))">Copy Link</button>
 </body>
 </html>`,
-      { status: 200, headers: { 'Content-Type': 'text/html' } }
+      { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
     );
   }
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Home, Menu, Play, Settings, Trophy, Users, X } from 'lucide-react';
+import { Globe, Home, Menu, Play, Settings, Trophy, User, Users, X } from 'lucide-react';
 import React, { useState } from 'react';
 import { PWAInstallBanner } from '../pwa/PWAInstallBanner';
 
@@ -14,6 +14,7 @@ export type ActiveScreen =
   | 'matchmaking'
   | 'board_game'
   | 'profile'
+  | 'leaderboard'
   | 'settings';
 
 interface TopNavBarProps {
@@ -25,8 +26,9 @@ interface TopNavBarProps {
 const navigationItems = [
   { screen: 'lobby' as const, label: 'Lobby', icon: Home },
   { screen: 'room_lobby' as const, label: 'Rooms', icon: Users },
-  { screen: 'matchmaking' as const, label: 'Matchmaking', icon: Trophy },
-  { screen: 'profile' as const, label: 'Profile', icon: Users },
+  { screen: 'leaderboard' as const, label: 'Leaderboard', icon: Trophy },
+  { screen: 'matchmaking' as const, label: 'Matchmaking', icon: Globe },
+  { screen: 'profile' as const, label: 'Profile', icon: User },
   { screen: 'settings' as const, label: 'Settings', icon: Settings },
 ];
 
@@ -39,7 +41,7 @@ export const TopNavBar: React.FC<TopNavBarProps> = ({
 
   // These screens have their own back controls; keep the floating menu clear
   // of their compact headers and primary actions.
-  if (['board_game', 'room_lobby', 'matchmaking'].includes(currentScreen)) return null;
+  if (['board_game', 'room_lobby', 'matchmaking', 'leaderboard'].includes(currentScreen)) return null;
 
   const navigate = (screen: ActiveScreen) => {
     onNavigate(screen);

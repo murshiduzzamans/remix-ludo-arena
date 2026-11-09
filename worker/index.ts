@@ -129,6 +129,7 @@ interface StoredRoom {
   maxPlayers: number;
   isMatchInProgress: boolean;
   gameState: GameState | null;
+  activeMoveIds?: string[];
   turnDeadline?: number | null;
   rematchRequests?: string[];
   teamSwapRequest?: { id: string; requesterId: string; targetId: string; expiresAt: number } | null;
@@ -365,6 +366,11 @@ export default {
     });
 
     const url = new URL(request.url);
+
+    // Health check
+    if (url.pathname === '/api/health' && request.method === 'GET') {
+      return json({ status: 'ok', timestamp: Date.now(), version: '1.0.0' }, 200, corsOrigin);
+    }
 
     // Auth routes
     if (url.pathname === '/api/auth/guest' && request.method === 'POST') {
@@ -1050,6 +1056,11 @@ export class LudoRoom {
   private broadcastGame(move?: OnlineTokenMove): void {
     if (this.room?.gameState) {
       const now = Date.now();
+      if (move) {
+        const activeMoveIds = this.room.activeMoveIds ?? [];
+        if (activeMoveIds.includes(move.id)) return;
+        this.room.activeMoveIds = [...activeMoveIds, move.id].slice(-64);
+      }
       this.broadcast({
         type: 'SERVER_GAME_STATE_SYNC',
         payload: {
@@ -1082,7 +1093,7 @@ export class LudoRoom {
       this.room = {
         code: String(body.code), hostId: host.id, mode: body.mode as StoredRoom['mode'],
         rules: normalizeRules(body.rules), participants: [host], maxPlayers: 4,
-        isMatchInProgress: false, gameState: null, turnDeadline: null, rematchRequests: [], teamSwapRequest: null,
+        isMatchInProgress: false, gameState: null, activeMoveIds: [], turnDeadline: null, rematchRequests: [], teamSwapRequest: null,
         chatEnabled: true, voiceEnabled: true, voiceParticipants: [], voiceCheckpointAt: null,
         ...(body.mode === 'team_2v2' ? { participants: [{ ...host, teamId: COLOR_TEAMS[host.color] }] } : {}),
       };
@@ -1261,7 +1272,26 @@ export class LudoRoom {
     }
 
     if (message.type === 'CLIENT_LEAVE_ROOM') {
-      if (participant.id === room.hostId) {
+      if (participant.id === room.hostId && room.isMatchInProgress && room.gameState?.phase !== 'game_over') {
+        this.cancelledVoiceJoins.add(participant.id);
+        await this.leaveVoiceSeat(participant.id);
+        participant.isConnected = false;
+        if (room.gameState) {
+          room.gameState.players = room.gameState.players.map((player) =>
+            player.id === participant.id
+              ? { ...player, isBot: true, botPersonality: 'balanced' }
+              : player
+          );
+        }
+        if (room.teamSwapRequest && (room.teamSwapRequest.requesterId === participant.id || room.teamSwapRequest.targetId === participant.id)) {
+          room.teamSwapRequest = null;
+        }
+        await this.saveRoom();
+        this.broadcastRoom();
+        await this.scheduleBotIfNeeded();
+        this.broadcastGame();
+        socket.close(1000, 'Player left room');
+      } else if (participant.id === room.hostId) {
         room.voiceClosing = true;
         for (const seatId of this.voiceJoinPromises.keys()) this.cancelledVoiceJoins.add(seatId);
         await this.saveRoom();
@@ -1297,6 +1327,10 @@ export class LudoRoom {
       return;
     }
 
+    if (message.type === 'CLIENT_VOICE_PERMISSION') {
+      return;
+    }
+
     if (message.type === 'CLIENT_SET_READY') {
       if (room.isMatchInProgress) return;
       const payload = message.payload as { isReady?: boolean } | undefined;
@@ -1313,6 +1347,7 @@ export class LudoRoom {
       if (room.teamSwapRequest && room.teamSwapRequest.expiresAt > Date.now()) return this.send(socket, { type: 'SERVER_ERROR', payload: { code: 'TEAM_SWAP_PENDING', message: 'Wait for the team change request to be answered or expire.' } });
       if (room.participants.some((player) => !player.isReady)) return this.send(socket, { type: 'SERVER_ERROR', payload: { code: 'PLAYERS_NOT_READY', message: 'Wait for every friend to be ready.' } });
       room.gameState = createRoomGame(room);
+      room.activeMoveIds = [];
       room.isMatchInProgress = true;
       room.rematchRequests = [];
       room.teamSwapRequest = null;
@@ -1340,6 +1375,7 @@ export class LudoRoom {
 
       if (allConnectedHumansRequested) {
         room.gameState = createRoomGame(room);
+        room.activeMoveIds = [];
         room.rematchRequests = [];
         room.participants = room.participants.map((player) => ({ ...player, isReady: false }));
         room.turnDeadline = null;
@@ -1364,6 +1400,7 @@ export class LudoRoom {
 
       room.isMatchInProgress = false;
       room.gameState = null;
+      room.activeMoveIds = [];
       room.turnDeadline = null;
       room.rematchRequests = [];
       room.teamSwapRequest = null;

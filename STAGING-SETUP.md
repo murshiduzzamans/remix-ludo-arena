@@ -43,7 +43,7 @@ database_id = "YOUR_STAGING_DATABASE_ID"  # Replace with actual ID from step 1.1
 
 ### 1.3 Run Migrations
 
-Execute all 5 migration files to set up the database schema:
+Execute all 8 migration files to set up the database schema:
 
 ```bash
 # Run all migrations for staging
@@ -52,6 +52,9 @@ npx wrangler d1 execute ludo-arena-staging-db --env staging --file=./migrations/
 npx wrangler d1 execute ludo-arena-staging-db --env staging --file=./migrations/0003_create_player_stats_table.sql
 npx wrangler d1 execute ludo-arena-staging-db --env staging --file=./migrations/0004_create_matches_table.sql
 npx wrangler d1 execute ludo-arena-staging-db --env staging --file=./migrations/0005_create_match_players_table.sql
+npx wrangler d1 execute ludo-arena-staging-db --env staging --file=./migrations/0006_add_github_and_sync_code.sql
+npx wrangler d1 execute ludo-arena-staging-db --env staging --file=./migrations/0007_add_profile_avatar.sql
+npx wrangler d1 execute ludo-arena-staging-db --env staging --file=./migrations/0008_add_match_progress_tracking.sql
 ```
 
 Or use the migration script:

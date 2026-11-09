@@ -22,6 +22,7 @@ export type ClientMessage =
   | { type: 'CLIENT_PING'; payload: { clientTimestamp: number } }
   | { type: 'CLIENT_SET_CHAT_ENABLED'; payload: { enabled: boolean } }
   | { type: 'CLIENT_SET_VOICE_ENABLED'; payload: { enabled: boolean } }
+  | { type: 'CLIENT_VOICE_PERMISSION'; payload: { granted: boolean } }
   | { type: 'chat'; text: string }
   | { type: 'chat_reaction'; reaction: ChatReaction }
   | { type: 'voice_join' }

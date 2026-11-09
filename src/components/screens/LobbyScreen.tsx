@@ -29,6 +29,7 @@ interface LobbyScreenProps {
   onOpenPrivateRooms: () => void;
   onOpenMatchmaking: () => void;
   onOpenProfile: () => void;
+  onOpenLeaderboard?: () => void;
   onOpenSettings?: () => void;
 }
 
@@ -38,6 +39,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   onOpenPrivateRooms,
   onOpenMatchmaking,
   onOpenProfile,
+  onOpenLeaderboard,
   onOpenSettings,
 }) => {
   const [profile, setProfile] = useState(() => loadProfile());
@@ -359,9 +361,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
         <div className="flex items-center justify-center gap-5 pt-1">
           {/* Button 1: Leaderboard / Career Crown */}
           <button
-            onClick={() => handleCardClick(onOpenProfile)}
+            onClick={() => handleCardClick(onOpenLeaderboard || onOpenProfile)}
             className="w-14 h-14 rounded-2xl bg-gradient-to-b from-[#0948BA] to-[#042874] border-[3px] border-[#FFD200] shadow-xl shadow-black/40 flex items-center justify-center hover:scale-105 active:scale-90 transition-transform cursor-pointer"
-            title="Career Stats & Rank"
+            title="Hall of Champions & Leaderboard"
           >
             <Crown className="w-7 h-7 text-[#FFD200] fill-[#FFD200]" />
           </button>

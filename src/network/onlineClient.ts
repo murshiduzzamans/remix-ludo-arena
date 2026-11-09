@@ -225,7 +225,11 @@ export class OnlineRoomConnection {
     } else if (message.type === 'SERVER_AUTHENTICATED') {
       if (this.voiceRequested) this.sendRaw({ type: 'voice_join' });
     } else if (message.type === 'SERVER_GAME_STATE_SYNC') {
+      const previousGameId = this.gameSnapshot?.id;
       this.gameSnapshot = message.payload.state;
+      if (this.gameSnapshot.id && this.gameSnapshot.id !== previousGameId) {
+        this.seenMoveIds.clear();
+      }
       this.turnTimeRemainingSeconds = message.payload.turnTimeRemainingSeconds;
       const move = message.payload.move;
       if (move && this.seenMoveIds.has(move.id)) return;
@@ -344,8 +348,9 @@ export class OnlineRoomConnection {
     this.send('CLIENT_SET_VOICE_ENABLED', { enabled });
   }
 
-  joinVoice(): void {
+  joinVoice(microphoneGranted: boolean): void {
     this.voiceRequested = true;
+    this.send('CLIENT_VOICE_PERMISSION', { granted: microphoneGranted });
     this.sendRaw({ type: 'voice_join' });
   }
 

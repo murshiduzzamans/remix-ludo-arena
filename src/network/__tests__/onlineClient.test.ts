@@ -34,11 +34,12 @@ describe('OnlineRoomConnection chat protocol', () => {
       voiceRequested: false,
     });
 
-    connection.joinVoice();
+    connection.joinVoice(true);
     connection.leaveVoice();
     connection.setVoiceEnabled(false);
 
     expect(sent.map((message) => JSON.parse(message))).toEqual([
+      { type: 'CLIENT_VOICE_PERMISSION', payload: { granted: true } },
       { type: 'voice_join' },
       { type: 'voice_leave' },
       { type: 'CLIENT_SET_VOICE_ENABLED', payload: { enabled: false } },

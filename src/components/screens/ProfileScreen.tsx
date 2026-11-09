@@ -8,6 +8,7 @@ import {
   Check,
   Pencil,
   Camera,
+  Trophy,
 } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
 import { sound } from '../../audio/soundEffects';
@@ -22,9 +23,10 @@ import { AvatarUploader } from '../accounts/AvatarUploader';
 
 interface ProfileScreenProps {
   onBack: () => void;
+  onOpenLeaderboard?: () => void;
 }
 
-export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
+export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack, onOpenLeaderboard }) => {
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
   const [history] = useState<MatchRecord[]>(loadMatchHistory);
   const [isEditing, setIsEditing] = useState(false);
@@ -40,7 +42,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
         const response = await fetch('/api/me', { credentials: 'include' });
         if (!response.ok) return;
         const data = (await response.json()) as { user?: { avatarUrl?: string | null } };
-        if (data.user?.avatarUrl) {
+        if (data.user) {
           setProfile((current) => {
             if (data.user?.avatarUrl === current.avatarUrl) return current;
             const updated = { ...current, avatarUrl: data.user?.avatarUrl ?? null };
@@ -360,6 +362,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBack }) => {
             </div>
           </div>
         </div>
+
+        {/* Global Leaderboard Access Button */}
+        {onOpenLeaderboard && (
+          <button
+            onClick={() => {
+              sound.triggerHaptic(15);
+              onOpenLeaderboard();
+            }}
+            className="w-full py-2.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-[#072468] font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg hover:brightness-110 active:scale-98 transition-all cursor-pointer border-2 border-yellow-200"
+          >
+            <Trophy className="w-4 h-4" />
+            <span>Hall of Champions & Leaderboard</span>
+          </button>
+        )}
 
         {/* Recent Matches Section */}
         <div className="w-full rounded-2xl bg-gradient-to-b from-[#0B64F0] via-[#0448BC] to-[#023188] border-[3px] border-[#FFD200] p-3 shadow-xl space-y-2">

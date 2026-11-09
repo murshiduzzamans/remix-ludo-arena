@@ -3,21 +3,47 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { sound } from './audio/soundEffects';
 import { ActiveScreen, TopNavBar } from './components/navigation/TopNavBar';
 import { OfflineIndicator } from './components/pwa/PWAInstallBanner';
-import { BoardGameScreen } from './components/screens/BoardGameScreen';
 import { LobbyScreen } from './components/screens/LobbyScreen';
-import { MatchmakingScreen } from './components/screens/MatchmakingScreen';
-import { ProfileScreen } from './components/screens/ProfileScreen';
-import { RoomLobbyScreen } from './components/screens/RoomLobbyScreen';
-import { SettingsScreen } from './components/screens/SettingsScreen';
-import { SoloSetupScreen } from './components/screens/SoloSetupScreen';
 import { DEFAULT_RULES } from './engine/gameEngine';
 import { BotPersonality, GameMode, GameRules, PlayerColor } from './engine/types';
 import { OnlineRoomConnection, roomCodeFromUrl } from './network/onlineClient';
 import { loadSettings } from './storage/profileStore';
+
+// Code-split screens to optimize initial load and isolate large assets
+const BoardGameScreen = React.lazy(() =>
+  import('./components/screens/BoardGameScreen').then((m) => ({ default: m.BoardGameScreen }))
+);
+const RoomLobbyScreen = React.lazy(() =>
+  import('./components/screens/RoomLobbyScreen').then((m) => ({ default: m.RoomLobbyScreen }))
+);
+const SoloSetupScreen = React.lazy(() =>
+  import('./components/screens/SoloSetupScreen').then((m) => ({ default: m.SoloSetupScreen }))
+);
+const MatchmakingScreen = React.lazy(() =>
+  import('./components/screens/MatchmakingScreen').then((m) => ({ default: m.MatchmakingScreen }))
+);
+const ProfileScreen = React.lazy(() =>
+  import('./components/screens/ProfileScreen').then((m) => ({ default: m.ProfileScreen }))
+);
+const LeaderboardScreen = React.lazy(() =>
+  import('./components/screens/LeaderboardScreen').then((m) => ({ default: m.LeaderboardScreen }))
+);
+const SettingsScreen = React.lazy(() =>
+  import('./components/screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen }))
+);
+
+function ScreenLoader() {
+  return (
+    <div className="flex-1 min-h-[50vh] flex flex-col items-center justify-center space-y-3">
+      <div className="w-10 h-10 border-4 border-[#FFD200] border-t-transparent rounded-full animate-spin" />
+      <span className="text-xs font-bold text-sky-200">Loading arena…</span>
+    </div>
+  );
+}
 
 export default function App() {
   useEffect(() => { sound.setHapticsEnabled(loadSettings().hapticFeedback); }, []);
@@ -51,7 +77,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#090D16] text-slate-100 font-sans">
-      {/* Compact icon menu; no persistent top or bottom navigation bars. */}
+      {/* Compact icon menu */}
       <TopNavBar
         currentScreen={currentScreen}
         onNavigate={setCurrentScreen}
@@ -60,85 +86,94 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col justify-center">
-        {currentScreen === 'lobby' && (
-          <LobbyScreen
-            onSelectMode={(mode) => startMatch(mode, 'red')}
-            onOpenSoloSetup={() => setCurrentScreen('solo_setup')}
-            onOpenPrivateRooms={() => setCurrentScreen('room_lobby')}
-            onOpenMatchmaking={() => setCurrentScreen('matchmaking')}
-            onOpenProfile={() => setCurrentScreen('profile')}
-            onOpenSettings={() => setCurrentScreen('settings')}
-          />
-        )}
+        <Suspense fallback={<ScreenLoader />}>
+          {currentScreen === 'lobby' && (
+            <LobbyScreen
+              onSelectMode={(mode) => startMatch(mode, 'red')}
+              onOpenSoloSetup={() => setCurrentScreen('solo_setup')}
+              onOpenPrivateRooms={() => setCurrentScreen('room_lobby')}
+              onOpenMatchmaking={() => setCurrentScreen('matchmaking')}
+              onOpenProfile={() => setCurrentScreen('profile')}
+              onOpenLeaderboard={() => setCurrentScreen('leaderboard')}
+              onOpenSettings={() => setCurrentScreen('settings')}
+            />
+          )}
 
-        {currentScreen === 'solo_setup' && (
-          <SoloSetupScreen
-            onStartMatch={(mode, color, personalities, rules) =>
-              startMatch(mode, color, personalities, rules)
-            }
-            onBack={() => setCurrentScreen('lobby')}
-            initialRules={activeRules}
-          />
-        )}
+          {currentScreen === 'solo_setup' && (
+            <SoloSetupScreen
+              onStartMatch={(mode, color, personalities, rules) =>
+                startMatch(mode, color, personalities, rules)
+              }
+              onBack={() => setCurrentScreen('lobby')}
+              initialRules={activeRules}
+            />
+          )}
 
-        {currentScreen === 'room_lobby' && (
-          <RoomLobbyScreen
-            initialRoomCode={inviteCode}
-            rules={activeRules}
-            existingConnection={onlineSession}
-            onStartOnlineMatch={(session) => {
-              setOnlineSession(session);
-              setActiveMode(session.currentRoom.mode);
-              setHumanColor(session.localColor);
-              setActiveRules(session.currentRoom.rules);
-              setCurrentScreen('board_game');
-            }}
-            onBack={() => {
-              window.history.replaceState({}, '', window.location.pathname);
-              setOnlineSession(null);
-              setCurrentScreen('lobby');
-            }}
-          />
-        )}
+          {currentScreen === 'room_lobby' && (
+            <RoomLobbyScreen
+              initialRoomCode={inviteCode}
+              rules={activeRules}
+              existingConnection={onlineSession}
+              onStartOnlineMatch={(session) => {
+                setOnlineSession(session);
+                setActiveMode(session.currentRoom.mode);
+                setHumanColor(session.localColor);
+                setActiveRules(session.currentRoom.rules);
+                setCurrentScreen('board_game');
+              }}
+              onBack={() => {
+                window.history.replaceState({}, '', window.location.pathname);
+                setOnlineSession(null);
+                setCurrentScreen('lobby');
+              }}
+            />
+          )}
 
-        {currentScreen === 'matchmaking' && (
-          <MatchmakingScreen
-            onCancel={() => setCurrentScreen('lobby')}
-            onEnterMatch={() => startMatch('classic_4p', 'red')}
-          />
-        )}
+          {currentScreen === 'matchmaking' && (
+            <MatchmakingScreen
+              onCancel={() => setCurrentScreen('lobby')}
+              onEnterMatch={() => startMatch('classic_4p', 'red')}
+            />
+          )}
 
-        {currentScreen === 'board_game' && (
-          <BoardGameScreen
-            initialMode={activeMode}
-            humanColor={onlineSession?.localColor ?? humanColor}
-            botPersonalities={botPersonalities}
-            rules={onlineSession?.currentRoom.rules ?? activeRules}
-            onlineSession={onlineSession ?? undefined}
-            onExit={() => {
-              onlineSession?.close();
-              setOnlineSession(null);
-              const url = new URL(window.location.href);
-              url.searchParams.delete('room');
-              window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
-              setCurrentScreen('lobby');
-            }}
-            onBackToRoom={() => setCurrentScreen('room_lobby')}
-          />
-        )}
+          {currentScreen === 'board_game' && (
+            <BoardGameScreen
+              initialMode={activeMode}
+              humanColor={onlineSession?.localColor ?? humanColor}
+              botPersonalities={botPersonalities}
+              rules={onlineSession?.currentRoom.rules ?? activeRules}
+              onlineSession={onlineSession ?? undefined}
+              onExit={() => {
+                onlineSession?.close();
+                setOnlineSession(null);
+                const url = new URL(window.location.href);
+                url.searchParams.delete('room');
+                window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+                setCurrentScreen('lobby');
+              }}
+              onBackToRoom={() => setCurrentScreen('room_lobby')}
+            />
+          )}
 
-        {currentScreen === 'profile' && (
-          <ProfileScreen onBack={() => setCurrentScreen('lobby')} />
-        )}
+          {currentScreen === 'profile' && (
+            <ProfileScreen
+              onBack={() => setCurrentScreen('lobby')}
+              onOpenLeaderboard={() => setCurrentScreen('leaderboard')}
+            />
+          )}
 
-        {currentScreen === 'settings' && (
-          <SettingsScreen onBack={() => setCurrentScreen('lobby')} />
-        )}
+          {currentScreen === 'leaderboard' && (
+            <LeaderboardScreen onBack={() => setCurrentScreen('lobby')} />
+          )}
+
+          {currentScreen === 'settings' && (
+            <SettingsScreen onBack={() => setCurrentScreen('lobby')} />
+          )}
+        </Suspense>
       </main>
 
       {/* Offline Status Toast */}
       <OfflineIndicator />
-
     </div>
   );
 }
